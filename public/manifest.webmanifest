@@ -1,0 +1,14 @@
+{
+  "name": "PILOT'TRESO",
+  "short_name": "PILOT'TRESO",
+  "description": "Votre trésorerie, pilotée à la voix.",
+  "lang": "fr",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f3f4f6",
+  "theme_color": "#15171a",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
