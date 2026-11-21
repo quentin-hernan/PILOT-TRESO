@@ -12,7 +12,15 @@ import { ondeviceRecognizer, preloadOnDeviceModel } from './ondeviceRecognizer';
 import type { VoiceRecognizer } from './types';
 
 export * from './types';
-export { ONDEVICE_MODEL_MB, isOnDeviceModelCached, isOnDeviceStorageVolatile, requestPersistentStorage } from './ondeviceRecognizer';
+export {
+  ONDEVICE_MODEL_MB,
+  isOnDeviceModelCached,
+  isOnDeviceStorageVolatile,
+  requestPersistentStorage,
+  downloadOnDeviceModel,
+  ondeviceContinuous,
+  type ContinuousEvents,
+} from './ondeviceRecognizer';
 export { isBrowserEngineAvailable } from './browserRecognizer';
 
 export type VoiceEngine = 'browser' | 'ondevice';

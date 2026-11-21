@@ -26,6 +26,10 @@ export interface ParsedCommand {
   recurring: boolean;
   /** Jour du mois dit pour une récurrence (« le 2 de chaque mois »), null sinon. */
   dayOfMonth: number | null;
+  /** Phrase de type « budget alimentation 400 euros » (compte particulier) : fixe le budget mensuel d'une catégorie. */
+  budget: boolean;
+  /** « Enlève le budget loisirs » : retire le budget. */
+  budgetRemove: boolean;
 }
 
 /* ───────── Normalisation ───────── */
@@ -77,7 +81,7 @@ export function wordsToNumber(tokens: string[]): number {
 
 /* ───────── Montant ───────── */
 
-function parseAmount(text: string): number | null {
+export function parseAmount(text: string): number | null {
   // 1. Chiffres suivis de « euros » : « 50 euros », « 12.50 euros », « 12 euros 50 ».
   const withEuros = text.match(/(\d+(?:\.\d{1,2})?)\s*(?:euros?|eur)\b(?:\s*(?:et\s*)?(\d{1,2})\b(?!\s*(?:euros?|eur|%)))?/);
   if (withEuros) {
@@ -195,7 +199,7 @@ function detectKind(text: string): OperationKind | null {
   return i < e ? 'recette' : 'depense';
 }
 
-function detectCategory(text: string, account: AccountType, kind: OperationKind | null): { id: string; word: string } | null {
+export function detectCategory(text: string, account: AccountType, kind: OperationKind | null): { id: string; word: string } | null {
   const categories = account === 'particulier' ? PERSONAL_CATEGORIES : PRO_CATEGORIES;
   let best: { id: string; len: number; pos: number; word: string } | null = null;
   for (const [id, words] of Object.entries(CATEGORY_KEYWORDS[account])) {
@@ -205,6 +209,45 @@ function detectCategory(text: string, account: AccountType, kind: OperationKind 
       const m = new RegExp(`\\b${w}\\b`).exec(text);
       if (!m) continue;
       if (!best || w.length > best.len || (w.length === best.len && m.index < best.pos)) best = { id, len: w.length, pos: m.index, word: w };
+    }
+  }
+  if (best) return { id: best.id, word: best.word };
+  return fuzzyCategory(text, account, kind);
+}
+
+/** Distance d'édition (nombre de lettres à changer) entre deux mots. */
+export function editDistance(a: string, b: string): number {
+  const row = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = row[0];
+    row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const tmp = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = tmp;
+    }
+  }
+  return row[b.length];
+}
+
+/**
+ * Dernier recours quand aucun mot-clé n'est reconnu tel quel : le moteur vocal écrit parfois « carburent » pour « carburant ».
+ * On accepte un mot (6 lettres ou plus) à une lettre près (deux pour les mots de 9 lettres ou plus).
+ */
+function fuzzyCategory(text: string, account: AccountType, kind: OperationKind | null): { id: string; word: string } | null {
+  const categories = account === 'particulier' ? PERSONAL_CATEGORIES : PRO_CATEGORIES;
+  const tokens = text.split(' ').filter((w) => w.length >= 6);
+  let best: { id: string; word: string; d: number } | null = null;
+  for (const [id, words] of Object.entries(CATEGORY_KEYWORDS[account])) {
+    const cat = categories.find((c) => c.id === id);
+    if (!cat || (kind && cat.kind !== kind)) continue;
+    for (const w of words) {
+      if (w.includes(' ') || w.length < 6) continue;
+      for (const t of tokens) {
+        const limit = w.length >= 9 ? 2 : 1;
+        const d = editDistance(t, w);
+        if (d <= limit && (!best || d < best.d)) best = { id, word: w, d };
+      }
     }
   }
   return best ? { id: best.id, word: best.word } : null;
@@ -278,10 +321,14 @@ export function parseCommand(transcript: string, account: AccountType, now: Date
   const normalized = normalize(transcript);
   const today = parisYMD(now);
 
+  // « budget alimentation 400 euros » : un budget est déjà mensuel, « tous les mois » n'en fait pas une récurrence.
+  const budget = account === 'particulier' && /\b(budget|plafond|enveloppe)\b/.test(normalized);
+  const budgetRemove = budget && /\b(enleve|enlever|retire|retirer|supprime|supprimer|efface|effacer|annule|annuler)\b/.test(normalized);
   const rec = extractRecurrence(normalized);
+  if (budget) rec.recurring = false;
   // Une récurrence n'a pas de date d'opération : « le 2 » est le jour du mois, pas une date passée.
-  const { ymd, rest } = rec.recurring ? { ymd: null, rest: rec.rest } : parseDate(normalized, today);
-  const amountCents = parseAmount(rest);
+  const { ymd, rest } = rec.recurring || budget ? { ymd: null, rest: rec.rest } : parseDate(normalized, today);
+  const amountCents = budgetRemove ? null : parseAmount(rest);
 
   const explicitKind = detectKind(rest);
   let found = detectCategory(rest, account, explicitKind);
@@ -315,5 +362,7 @@ export function parseCommand(transcript: string, account: AccountType, now: Date
     categoryWord: found ? originalWords(transcript, found.word) : '',
     recurring: rec.recurring,
     dayOfMonth: rec.day,
+    budget,
+    budgetRemove,
   };
 }

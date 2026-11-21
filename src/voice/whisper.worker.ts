@@ -22,6 +22,15 @@ type PipelineFactory = (
 
 env.allowLocalModels = false;
 
+// Plusieurs cœurs du processeur pour le calcul (possible quand la page est « isolée » : voir les en-têtes COOP / COEP).
+if (self.crossOriginIsolated) {
+  const cores = self.navigator.hardwareConcurrency || 4;
+  (env.backends.onnx as { wasm?: { numThreads?: number } }).wasm = {
+    ...((env.backends.onnx as { wasm?: object }).wasm ?? {}),
+    numThreads: Math.max(2, Math.min(8, cores - 1)),
+  };
+}
+
 let transcriber: Promise<Transcriber> | null = null;
 
 function load(): Promise<Transcriber> {
@@ -59,7 +68,13 @@ self.onmessage = async (e: MessageEvent<{ type: 'load' } | { type: 'transcribe';
   const msg = e.data;
   try {
     if (msg.type === 'load') {
-      await load();
+      const asr = await load();
+      // Échauffement à vide : sans lui, la toute première phrase dite serait nettement plus lente.
+      try {
+        await asr(new Float32Array(16000), { language: 'french', task: 'transcribe', max_new_tokens: 4 });
+      } catch {
+        /* sans conséquence */
+      }
       self.postMessage({ type: 'ready' });
     } else if (msg.type === 'transcribe') {
       const asr = await load();
@@ -67,8 +82,7 @@ self.onmessage = async (e: MessageEvent<{ type: 'load' } | { type: 'transcribe';
       const out = await asr(msg.audio, {
         language: 'french',
         task: 'transcribe',
-        chunk_length_s: 30,
-        max_new_tokens: 60,
+        max_new_tokens: 48,
         no_repeat_ngram_size: 3,
       });
       const text = Array.isArray(out) ? out.map((o) => o.text).join(' ') : out.text;

@@ -80,6 +80,8 @@ export interface Forecast {
   events: ForecastEvent[];
   /** Factures à encaisser en retard : NON comptées dans la prévision (prudence). */
   overdueReceivableCents: number;
+  /** Dépenses / recettes habituelles intégrées à la courbe (moyenne des mois précédents), par mois. */
+  habitual?: { expensePerMonthCents: number; incomePerMonthCents: number; months: number };
 }
 
 export const HORIZONS = [30, 60, 90] as const;
@@ -90,6 +92,8 @@ interface ForecastInput {
   recurrings: Recurring[];
   invoices: Invoice[];
   today: string;
+  /** Ce qui passe d'habitude chaque mois en dehors des récurrences (voir habitualFlows). */
+  habitual?: { expenseDailyCents: number; incomeDailyCents: number; expensePerMonthCents: number; incomePerMonthCents: number; months: number };
 }
 
 /**
@@ -97,7 +101,7 @@ interface ForecastInput {
  * Les dépenses courantes non récurrentes ne sont pas devinées : seul ce qui est prévu est compté.
  * Les factures à payer en retard sont comptées dès aujourd'hui ; celles à encaisser en retard ne le sont pas.
  */
-export function forecast({ balanceCents, recurrings, invoices, today }: ForecastInput): Forecast {
+export function forecast({ balanceCents, recurrings, invoices, today, habitual }: ForecastInput): Forecast {
   const end = addDaysKey(today, 90);
   const events: ForecastEvent[] = [];
 
@@ -132,7 +136,9 @@ export function forecast({ balanceCents, recurrings, invoices, today }: Forecast
   let running = balanceCents;
   for (let i = 0; i <= 90; i++) {
     running += delta[i];
-    series.push(running);
+    // chaque jour à venir : les dépenses (et recettes) habituelles du mois, en plus des événements connus
+    if (i > 0 && habitual) running += habitual.incomeDailyCents - habitual.expenseDailyCents;
+    series.push(Math.round(running));
   }
 
   let lowIdx = 0;
@@ -149,6 +155,7 @@ export function forecast({ balanceCents, recurrings, invoices, today }: Forecast
     series,
     events,
     overdueReceivableCents,
+    habitual: habitual ? { expensePerMonthCents: habitual.expensePerMonthCents, incomePerMonthCents: habitual.incomePerMonthCents, months: habitual.months } : undefined,
   };
 }
 

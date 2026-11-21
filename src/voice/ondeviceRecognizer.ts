@@ -376,3 +376,239 @@ export function ondeviceRecognizer(): VoiceRecognizer {
     },
   };
 }
+
+/* ───────── Écoute permanente (« Dis Pilot ») ───────── */
+
+/** Télécharge le moteur sur l'appareil (avec l'accord de l'utilisateur) ; à utiliser pour activer Pilot. */
+export function downloadOnDeviceModel(onProgress: (percent: number) => void): Promise<void> {
+  return loadModel(onProgress);
+}
+
+export interface ContinuousEvents {
+  /** Le micro est ouvert et le moteur prêt : l'écoute permanente a démarré. */
+  onStart?: () => void;
+  /** Niveau sonore (pour un indicateur). */
+  onLevel?: (level: number) => void;
+  /** Une transcription est en cours de calcul. */
+  onBusy?: (busy: boolean) => void;
+  /** Aperçu : transcription rapide du DÉBUT d'une phrase encore en cours (sert à réagir dès « Dis Pilot », avant la fin). */
+  onPeek?: (text: string) => void;
+  /** Une phrase complète a été entendue et transcrite. */
+  onText: (text: string) => void;
+  onError: (kind: VoiceErrorKind, code: string) => void;
+}
+
+const CONT_SILENCE_MS = 650; // pause qui termine une phrase (plus court = plus réactif ; « Dis Pilot … » coupé en deux reste compris)
+const CONT_PEEK_AT_MS = 1100; // durée de voix à partir de laquelle on regarde le début de la phrase
+const CONT_MAX_MS = 12000; // une commande ne dépasse pas 12 s
+const CONT_MIN_VOICE_MS = 350; // en dessous : bruit (claquement, toux), ignoré
+const CONT_PREROLL_FRAMES = 3; // on garde ~0,3 s avant la voix pour ne pas couper le début du mot
+const CONT_MAX_QUEUE = 2; // si le moteur est en retard, on abandonne les phrases en trop (la plus récente prime)
+
+/**
+ * Garde le micro ouvert, découpe la parole en phrases (silence = fin de phrase) et transcrit chacune sur l'appareil.
+ * Le son ne quitte jamais l'appareil et n'est pas conservé. À arrêter avec `stop()`.
+ */
+export function ondeviceContinuous(ev: ContinuousEvents): { stop: () => void; setPaused: (paused: boolean) => void } {
+  let stopped = false;
+  /** Sourdine : le micro reste ouvert (reprise instantanée) mais le son n'est pas pris en compte. */
+  let paused = false;
+  let cleanup: (() => void) | null = null;
+
+  void (async () => {
+    if (!isOnDeviceModelCached()) {
+      ev.onError('model', 'not-downloaded');
+      return;
+    }
+    let stream: MediaStream;
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) throw new DOMException('insecure', 'SecurityError');
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: true },
+      });
+    } catch (e) {
+      if (!stopped) ev.onError(mapMediaError(e), e instanceof Error ? e.name : 'getUserMedia');
+      return;
+    }
+    if (stopped) {
+      stream.getTracks().forEach((t) => t.stop());
+      return;
+    }
+    try {
+      await loadModel(() => undefined);
+    } catch (e) {
+      stream.getTracks().forEach((t) => t.stop());
+      if (!stopped) ev.onError('model', e instanceof Error ? e.message : 'model');
+      return;
+    }
+    if (stopped) {
+      stream.getTracks().forEach((t) => t.stop());
+      return;
+    }
+
+    const ctx = new AudioContext();
+    try {
+      await ctx.resume();
+    } catch {
+      /* le navigateur peut exiger un geste : l'activation vient d'un appui, donc normalement inutile */
+    }
+    const sampleRate = ctx.sampleRate;
+    const source = ctx.createMediaStreamSource(stream);
+    const processor = ctx.createScriptProcessor(4096, 1, 1);
+    const mute = ctx.createGain();
+    mute.gain.value = 0; // rien ne doit ressortir des haut-parleurs
+    source.connect(processor);
+    processor.connect(mute);
+    mute.connect(ctx.destination);
+
+    const frameMs = (4096 / sampleRate) * 1000;
+    let noise = 0;
+    let inSpeech = false;
+    let frames: Float32Array[] = [];
+    const preroll: Float32Array[] = [];
+    let voicedMs = 0;
+    let sinceVoiceMs = 0;
+    let segmentMs = 0;
+    let queued = 0;
+    let peeked = false;
+    let segmentId = 0;
+
+    /** Transcrit le début de la phrase en cours, sans attendre qu'elle se termine. */
+    const peek = () => {
+      peeked = true;
+      if (queued > 0 || !ev.onPeek) return;
+      const total = frames.reduce((n, f) => n + f.length, 0);
+      const joined = new Float32Array(total);
+      let off = 0;
+      for (const f of frames) {
+        joined.set(f, off);
+        off += f.length;
+      }
+      const id = segmentId;
+      queued++;
+      void (async () => {
+        try {
+          const text = clean(await transcribe(normalizeAudio(resample(joined, sampleRate))));
+          if (!stopped && text && id === segmentId) ev.onPeek?.(text);
+        } catch {
+          /* sans conséquence */
+        } finally {
+          queued--;
+        }
+      })();
+    };
+
+    const flush = () => {
+      segmentId++;
+      peeked = false;
+      const enough = voicedMs >= CONT_MIN_VOICE_MS;
+      const parts = frames;
+      frames = [];
+      inSpeech = false;
+      voicedMs = 0;
+      sinceVoiceMs = 0;
+      segmentMs = 0;
+      if (!enough || queued >= CONT_MAX_QUEUE) return;
+      const total = parts.reduce((n, f) => n + f.length, 0);
+      const joined = new Float32Array(total);
+      let off = 0;
+      for (const f of parts) {
+        joined.set(f, off);
+        off += f.length;
+      }
+      queued++;
+      ev.onBusy?.(true);
+      void (async () => {
+        try {
+          const t0 = performance.now();
+          const text = clean(await transcribe(normalizeAudio(resample(joined, sampleRate))));
+          if (import.meta.env.DEV) console.debug(`[pilot] transcription : ${Math.round(performance.now() - t0)} ms pour ${(joined.length / sampleRate).toFixed(1)} s de son (isolé : ${self.crossOriginIsolated})`);
+          if (!stopped && text) ev.onText(text);
+        } catch {
+          /* une phrase perdue n'arrête pas l'écoute */
+        } finally {
+          queued--;
+          if (queued === 0 && !stopped) ev.onBusy?.(false);
+        }
+      })();
+    };
+
+    processor.onaudioprocess = (e) => {
+      if (stopped) return;
+      if (paused) {
+        // Pilot parle : on écarte ce son (sinon il s'entendrait lui-même), sans fermer le micro
+        if (inSpeech || frames.length) {
+          frames = [];
+          inSpeech = false;
+          voicedMs = 0;
+          sinceVoiceMs = 0;
+          segmentMs = 0;
+          peeked = false;
+          segmentId++;
+        }
+        preroll.length = 0;
+        return;
+      }
+      const data = new Float32Array(e.inputBuffer.getChannelData(0));
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
+      const rms = Math.sqrt(sum / data.length);
+      ev.onLevel?.(rms);
+
+      const threshold = Math.max(MIN_SPEECH_LEVEL, noise * NOISE_FACTOR);
+      const voiced = rms > (inSpeech ? threshold * KEEP_FACTOR : threshold);
+
+      if (!inSpeech) {
+        if (voiced) {
+          inSpeech = true;
+          frames = [...preroll, data];
+          preroll.length = 0;
+          voicedMs = frameMs;
+          sinceVoiceMs = 0;
+          segmentMs = frameMs;
+          peeked = false;
+        } else {
+          noise = noise === 0 ? rms : noise * 0.97 + rms * 0.03; // le bruit ambiant s'adapte au lieu
+          preroll.push(data);
+          if (preroll.length > CONT_PREROLL_FRAMES) preroll.shift();
+        }
+        return;
+      }
+      frames.push(data);
+      segmentMs += frameMs;
+      if (!peeked && voicedMs >= CONT_PEEK_AT_MS) peek();
+      if (voiced) {
+        voicedMs += frameMs;
+        sinceVoiceMs = 0;
+      } else {
+        sinceVoiceMs += frameMs;
+      }
+      if (sinceVoiceMs >= CONT_SILENCE_MS || segmentMs >= CONT_MAX_MS) flush();
+    };
+
+    cleanup = () => {
+      processor.onaudioprocess = null;
+      try {
+        source.disconnect();
+        processor.disconnect();
+        mute.disconnect();
+      } catch {
+        /* déjà déconnecté */
+      }
+      stream.getTracks().forEach((t) => t.stop());
+      void ctx.close();
+    };
+    ev.onStart?.();
+  })();
+
+  return {
+    stop() {
+      stopped = true;
+      cleanup?.();
+      cleanup = null;
+    },
+    setPaused(value: boolean) {
+      paused = value;
+    },
+  };
+}

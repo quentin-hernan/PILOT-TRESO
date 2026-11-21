@@ -11,6 +11,17 @@ import { Icon } from '../../components/Icon';
 
 export function PersonalCategories({ ops, planning }: { ops: Operation[]; planning: PlanningApi }) {
   const [editing, setEditing] = useState<Category | null>(null);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const clearAll = async () => {
+    setClearing(true);
+    try {
+      await planning.clearBudgets();
+    } finally {
+      setClearing(false);
+      setConfirmClear(false);
+    }
+  };
   const t = parisYMD(new Date());
   const monthOps = opsOfMonth(ops, t.y, t.m);
   // Les charges fixes (logement, électricité, crédit) sont des récurrences : ni budget ni répartition ici.
@@ -70,6 +81,20 @@ export function PersonalCategories({ ops, planning }: { ops: Operation[]; planni
         </ul>
       </section>
 
+      {budgeted.length > 0 && (
+        <div className="add-row">
+          {confirmClear ? (
+            <button className="btn btn-danger btn-small" disabled={clearing} onClick={() => void clearAll()}>
+              Confirmer : retirer tous les budgets
+            </button>
+          ) : (
+            <button className="btn btn-ghost btn-small danger-text" onClick={() => setConfirmClear(true)}>
+              Retirer tous les budgets
+            </button>
+          )}
+        </div>
+      )}
+
       {unbudgeted.length > 0 && (
         <section className="card">
           <div className="card-head">
@@ -95,8 +120,8 @@ export function PersonalCategories({ ops, planning }: { ops: Operation[]; planni
       {editing && (
         <BudgetSheet
           category={editing}
-          currentCents={budgets.get(editing.id)}
-          onSave={(cents) => planning.setBudget(editing.id, cents)}
+          budgets={budgets}
+          onSave={planning.setBudget}
           onClose={() => setEditing(null)}
         />
       )}

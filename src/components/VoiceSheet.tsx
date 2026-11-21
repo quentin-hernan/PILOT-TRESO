@@ -25,7 +25,7 @@ import {
   type VoiceRecognizer,
 } from '../voice/recognizer';
 import { Icon } from './Icon';
-import type { RecurringPrefill } from './PlanSheets';
+import type { BudgetPrefill, RecurringPrefill } from './PlanSheets';
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const ymdToStr = (p: YMD) => `${p.y}-${pad(p.m)}-${pad(p.d)}`;
@@ -51,6 +51,12 @@ interface Props {
   onDirect?: (draft: OperationDraft) => Promise<void>;
   /** Phrase de type « tous les mois… » : ouvre la fenêtre de récurrence, pré-remplie (jamais enregistrée directement). */
   onRecurring?: (prefill: RecurringPrefill) => void;
+  /** Phrase de type « budget alimentation 400 euros » : ouvre la fenêtre de budget, pré-remplie. */
+  onBudget?: (prefill: BudgetPrefill) => void;
+  /** Phrase déjà entendue par Pilot : on l'analyse tout de suite, sans écouter. */
+  presetText?: string;
+  /** Phrase dictée au micro : renvoie true si c'est une commande Pilot (question, navigation…), alors traitée ailleurs. */
+  onCommand?: (text: string) => boolean;
   onDelete?: () => Promise<void>;
   onClose: () => void;
 }
@@ -65,6 +71,9 @@ export function VoiceSheet({
   onConfirm,
   onDirect,
   onRecurring,
+  onBudget,
+  presetText,
+  onCommand,
   onDelete,
   onClose,
 }: Props) {
@@ -76,7 +85,7 @@ export function VoiceSheet({
   const originalStr = initial ? ymdToStr(parisYMD(initial.date)) : null;
 
   const [step, setStep] = useState<'listening' | 'review' | 'error' | 'setup' | 'setupHeard' | 'setupDone'>(
-    mode === 'voice' ? 'listening' : 'review',
+    mode === 'voice' && !presetText ? 'listening' : 'review',
   );
   // true pendant la configuration : on écoute pour TESTER le micro, rien n'est enregistré.
   const testRef = useRef(false);
@@ -102,8 +111,8 @@ export function VoiceSheet({
 
   const recognizer = useRef<VoiceRecognizer | null>(null);
   // Les rappels du moteur de reconnaissance ne doivent pas rester figés sur d'anciennes valeurs.
-  const latest = useRef({ directSave, expenseOnly, onDirect, onRecurring });
-  latest.current = { directSave, expenseOnly, onDirect, onRecurring };
+  const latest = useRef({ directSave, expenseOnly, onDirect, onRecurring, onBudget, onCommand, onClose });
+  latest.current = { directSave, expenseOnly, onDirect, onRecurring, onBudget, onCommand, onClose };
 
   /** Utilise la meilleure variante proposée par le moteur : la première qui donne montant + catégorie. */
   const analyse = useCallback(
@@ -116,7 +125,23 @@ export function VoiceSheet({
 
   const handleFinal = useCallback(
     async (text: string, alternatives: string[]) => {
+      if (latest.current.onCommand?.(text)) {
+        latest.current.onClose();
+        return;
+      }
       const p = analyse(text, alternatives);
+      if (p.budget && latest.current.onBudget && !latest.current.expenseOnly) {
+        const cat = categories.find((c) => c.id === p.categoryId);
+        const fixed = Boolean(cat?.fixed);
+        latest.current.onBudget({
+          heard: p.transcript,
+          categoryId: cat && cat.kind === 'depense' && !fixed ? cat.id : '',
+          amountCents: p.amountCents,
+          remove: p.budgetRemove,
+          note: fixed ? `${cat!.label} est une charge fixe : elle se gère dans les récurrences, pas en budget.` : undefined,
+        });
+        return;
+      }
       if (p.recurring && latest.current.onRecurring && !latest.current.expenseOnly) {
         const cat = categories.find((c) => c.id === p.categoryId);
         const word = p.categoryWord ? p.categoryWord.charAt(0).toUpperCase() + p.categoryWord.slice(1) : '';
@@ -241,6 +266,10 @@ export function VoiceSheet({
   // Démarre l'écoute dès l'ouverture en mode dictée.
   useEffect(() => {
     if (mode !== 'voice') return;
+    if (presetText) {
+      void handleFinal(presetText, []);
+      return;
+    }
     const t = setTimeout(() => startListening(), 50);
     return () => {
       clearTimeout(t);
@@ -365,7 +394,7 @@ export function VoiceSheet({
                 ) : (
                   <span className="muted small">
                     Parlez, puis marquez une courte pause (ou appuyez sur Terminer).
-                    {!expenseOnly && <> Pour une récurrence, dites par exemple « tous les mois, le 2, loyer 750 euros ».</>}
+                    {!expenseOnly && <> Pour une récurrence : « tous les mois, le 2, loyer 750 euros ».{account === 'particulier' && <> Pour un budget : « budget alimentation 400 euros ».</>}</>}
                   </span>
                 )}
               </p>

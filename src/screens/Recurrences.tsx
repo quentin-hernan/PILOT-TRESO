@@ -10,7 +10,7 @@ interface Props {
   recurrings: Recurring[];
   categories: Category[];
   professional: boolean;
-  onAdd: (d: RecurringDraft) => Promise<void>;
+  onAdd: (d: RecurringDraft) => Promise<unknown>;
   onUpdate: (id: string, d: RecurringDraft) => Promise<void>;
   onSetActive: (id: string, active: boolean) => Promise<void>;
   onRemove: (id: string) => Promise<void>;

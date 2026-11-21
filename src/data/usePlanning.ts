@@ -40,13 +40,17 @@ export interface PlanningApi {
   /** Budget mensuel par catégorie (slug -> centimes). Compte particulier. */
   budgets: Map<string, number>;
   invoices: Invoice[];
-  addRecurring: (d: RecurringDraft) => Promise<void>;
+  /** Renvoie l'identifiant créé. */
+  addRecurring: (d: RecurringDraft) => Promise<string>;
   updateRecurring: (id: string, d: RecurringDraft) => Promise<void>;
   setRecurringActive: (id: string, active: boolean) => Promise<void>;
   removeRecurring: (id: string) => Promise<void>;
   /** `null` = pas de budget pour cette catégorie. */
   setBudget: (categoryId: string, cents: number | null) => Promise<void>;
-  addInvoice: (d: InvoiceDraft) => Promise<void>;
+  /** Retire le budget de toutes les catégories. */
+  clearBudgets: () => Promise<void>;
+  /** Renvoie l'identifiant créé. */
+  addInvoice: (d: InvoiceDraft) => Promise<string>;
   updateInvoice: (id: string, d: InvoiceDraft) => Promise<void>;
   setInvoiceStatus: (id: string, status: Invoice['status']) => Promise<void>;
   removeInvoice: (id: string) => Promise<void>;
@@ -187,10 +191,11 @@ export function usePlanning({ live, account, userId, orgId, role, onRecurringApp
 
   // ───── Récurrences ─────
   const addRecurring = useCallback(
-    async (d: RecurringDraft) => {
+    async (d: RecurringDraft): Promise<string> => {
       if (!live) {
-        setRecurrings((l) => [...l, { id: `rec-${Date.now()}`, ...d, active: true, lastApplied: todayKey() }]);
-        return;
+        const id = `rec-${Date.now()}`;
+        setRecurrings((l) => [...l, { id, ...d, active: true, lastApplied: todayKey() }]);
+        return id;
       }
       const { sb, scopeVal: sv } = need();
       const { data, error: e } = await sb
@@ -209,6 +214,7 @@ export function usePlanning({ live, account, userId, orgId, role, onRecurringApp
         .single();
       if (e) throw new Error(e.message);
       setRecurrings((l) => [...l, toRecurring(data as RecRow, idToSlug)]);
+      return (data as RecRow).id;
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [live, scopeCol, scopeVal, slugToId, idToSlug, toRecurring],
@@ -306,15 +312,26 @@ export function usePlanning({ live, account, userId, orgId, role, onRecurringApp
     [live, scopeCol, slugToId],
   );
 
+  const clearBudgets = useCallback(async () => {
+    if (live) {
+      const { sb, scopeVal: sv } = need();
+      const { error: e } = await sb.from('categories').update({ budget_cents: null }).eq(scopeCol, sv);
+      if (e) throw new Error(e.message);
+    }
+    setBudgetMap(new Map());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live, scopeCol]);
+
   // ───── Factures ─────
   const addInvoice = useCallback(
-    async (d: InvoiceDraft) => {
+    async (d: InvoiceDraft): Promise<string> => {
       if (!live) {
+        const id = `inv-${Date.now()}`;
         setInvoices((l) => [
           ...l,
-          { id: `inv-${Date.now()}`, counterparty: d.counterparty, label: d.label, amountCents: d.amountCents, dueDate: keyToIso(d.dueKey), direction: d.direction, status: 'en_attente' },
+          { id, counterparty: d.counterparty, label: d.label, amountCents: d.amountCents, dueDate: keyToIso(d.dueKey), direction: d.direction, status: 'en_attente' },
         ]);
-        return;
+        return id;
       }
       const { sb, scopeVal: sv } = need();
       const { data, error: e } = await sb
@@ -324,6 +341,7 @@ export function usePlanning({ live, account, userId, orgId, role, onRecurringApp
         .single();
       if (e) throw new Error(e.message);
       setInvoices((l) => [...l, toInvoice(data as InvRow)]);
+      return (data as InvRow).id;
     },
     [live],
   );
@@ -387,6 +405,7 @@ export function usePlanning({ live, account, userId, orgId, role, onRecurringApp
     setRecurringActive,
     removeRecurring,
     setBudget,
+    clearBudgets,
     addInvoice,
     updateInvoice,
     setInvoiceStatus,

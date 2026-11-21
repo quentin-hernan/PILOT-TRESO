@@ -1585,3 +1585,302 @@ html,
 body {
   overflow-x: hidden;
 }
+
+/* ───────── Pilot : commande vocale mains libres ───────── */
+.pilot-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.pilot-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #9aa1ab;
+  transition: transform 0.12s ease;
+}
+.pilot-pill.listening {
+  color: var(--pos);
+  border-color: color-mix(in srgb, var(--pos) 45%, #fff);
+}
+.pilot-pill.listening .pilot-dot {
+  background: var(--pos);
+}
+.pilot-pill.busy {
+  color: var(--brand);
+  border-color: var(--brand);
+}
+.pilot-pill.busy .pilot-dot {
+  background: var(--brand);
+  animation: pilot-pulse 0.8s ease-in-out infinite;
+}
+.pilot-pill.starting .pilot-dot,
+.pilot-pill.paused .pilot-dot {
+  background: #c47f00;
+}
+.pilot-pill.error .pilot-dot {
+  background: var(--neg);
+}
+@keyframes pilot-pulse {
+  50% {
+    transform: scale(1.5);
+    opacity: 0.6;
+  }
+}
+.pilot-panel {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(var(--nav-h) + 22px + env(safe-area-inset-bottom));
+  width: min(560px, calc(100% - 24px));
+  z-index: 30;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  background: var(--ink);
+  color: #fff;
+  border-left: 4px solid var(--brand-light);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+  animation: sheet-up 0.2s ease;
+}
+.pilot-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  font-size: 0.9rem;
+}
+.pilot-panel small.muted {
+  color: #aeb6c1;
+}
+.pilot-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+.pilot-panel .btn-ghost {
+  background: transparent;
+  color: #fff;
+  border-color: #5f6670;
+}
+.pilot-close {
+  color: #aeb6c1;
+  padding: 2px;
+}
+.pilot-try {
+  display: flex;
+  gap: 8px;
+}
+.pilot-try input {
+  flex: 1;
+  min-width: 0;
+}
+.pilot-help summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.86rem;
+}
+.pilot-help p {
+  font-size: 0.84rem;
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+/* Budget du mois calculé */
+.budget-lines {
+  margin: 0 0 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.budget-lines > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.88rem;
+}
+.budget-lines dt small {
+  display: block;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+.budget-lines dd {
+  margin: 0;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.budget-lines .total {
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+  margin-top: 2px;
+  font-weight: 700;
+}
+
+/* Pilot : barre du bas (micro ouvert dès « Dis Pilot ») et questions au milieu de l'écran */
+.pilot-panel.phase-listening {
+  background: var(--brand);
+  border-left-color: #fff;
+  align-items: center;
+}
+.pilot-listen {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  font-size: 0.95rem;
+}
+.pilot-mic {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: #fff;
+  color: var(--brand);
+  animation: pilot-pulse 1.1s ease-in-out infinite;
+}
+.pilot-bars {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 28px;
+}
+.pilot-bars i {
+  width: 4px;
+  min-height: 6px;
+  border-radius: 2px;
+  background: #fff;
+  transition: height 0.08s ease;
+}
+.pilot-dots {
+  display: inline-flex;
+  gap: 5px;
+  padding: 6px 0;
+}
+.pilot-dots i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #aeb6c1;
+  animation: pilot-dot 1s ease-in-out infinite;
+}
+.pilot-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.pilot-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes pilot-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+.pilot-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(21, 23, 26, 0.45);
+  animation: fade 0.15s ease;
+}
+.pilot-dialog {
+  width: min(420px, 100%);
+  max-height: 86dvh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  background: var(--surface);
+  border-top: 3px solid var(--brand);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+  animation: sheet-up 0.18s ease;
+}
+.pilot-summary {
+  font-weight: 700;
+  font-size: 1rem;
+  margin: 0;
+}
+.pilot-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pilot-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid #c5cad1;
+  background: var(--surface);
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+.chip:hover {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+.pilot-dialog-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.pilot-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+.pilot-status .pilot-bars i {
+  background: var(--brand);
+}
+.pilot-status.speaking {
+  color: var(--muted);
+}
+.pilot-status.busy {
+  color: var(--brand);
+}
+.hint-ok {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--pos) 12%, #fff);
+  color: var(--pos);
+  font-size: 0.84rem;
+}

@@ -70,8 +70,12 @@ export function ForecastCard({ forecast, professional }: { forecast: Forecast; p
       )}
 
       <p className="muted small">
-        Calculé à partir du solde actuel, de vos récurrences{professional ? ' et de vos factures en attente' : ''}. Les dépenses courantes qui ne sont
-        pas récurrentes ne sont pas estimées.
+        Calculé à partir du solde actuel, de vos récurrences{professional ? ', de vos factures en attente' : ''} et de vos dépenses habituelles
+        {forecast.habitual
+          ? ` (en moyenne ${formatEuros(forecast.habitual.expensePerMonthCents)} par mois${forecast.habitual.incomePerMonthCents > 0 ? `, pour ${formatEuros(forecast.habitual.incomePerMonthCents)} de recettes habituelles` : ''}, d'après ${
+              forecast.habitual.months > 0 ? `les ${forecast.habitual.months} dernier${forecast.habitual.months > 1 ? 's' : ''} mois` : 'ce mois-ci'
+            })`
+          : ' (pas encore assez d’historique pour les estimer)'}.
         {forecast.overdueReceivableCents > 0 &&
           ` ${formatEuros(forecast.overdueReceivableCents)} de factures à encaisser en retard ne sont pas comptés.`}
       </p>

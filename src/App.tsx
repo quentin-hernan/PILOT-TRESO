@@ -5,11 +5,23 @@ import { usePlanning } from './data/usePlanning';
 import { categoriesFor } from './data/categories';
 import { buildAlerts, forecast as computeForecast, todayKey } from './lib/forecast';
 import { signed } from './lib/stats';
+import { habitualFlows, monthlyBudget } from './lib/monthly';
+import { usePilot } from './pilot/usePilot';
+import { runIntent, type PilotEnv, type PilotReply } from './pilot/execute';
+import { parseIntent, type InvoiceVoiceDraft } from './voice/intents';
+import { parseCommand } from './voice/parseCommand';
+
+const NOT_FOR_EMPLOYEE_SAY = "Cette commande n'est pas disponible avec votre profil.";
+import { PilotDialog, PilotPanelCard, PilotPill, PilotSheet } from './components/PilotUI';
+import { applyAnswer, applyField, missingSlots, QUESTIONS, type Candidate } from './pilot/missing';
+import { isNo } from './voice/wake';
+import { InvoiceSheet } from './components/PlanSheets';
+import { parisYMD } from './lib/dates';
 import { useAuth } from './auth/AuthProvider';
 import { BottomNav, type NavItem } from './components/BottomNav';
 import { VoiceSheet } from './components/VoiceSheet';
 import { OpeningSheet } from './components/OpeningSheet';
-import { RecurringSheet, type RecurringPrefill } from './components/PlanSheets';
+import { BudgetSheet, RecurringSheet, type BudgetPrefill, type RecurringPrefill } from './components/PlanSheets';
 import { warmUpVoiceEngine } from './voice/recognizer';
 import { OperationSelectContext } from './components/OperationContext';
 import { formatEuros } from './lib/money';
@@ -158,10 +170,13 @@ interface WorkspaceProps {
 }
 
 type SheetState =
-  | { kind: 'op'; mode: 'voice' | 'manual' }
+  | { kind: 'op'; mode: 'voice' | 'manual'; presetText?: string }
+  | { kind: 'pilot' }
+  | { kind: 'invoice'; draft: InvoiceVoiceDraft & { heard: string } }
   | { kind: 'edit'; op: Operation }
   | { kind: 'recurring'; prefill: RecurringPrefill }
-  | { kind: 'opening' };
+  | { kind: 'budget'; prefill: BudgetPrefill }
+  | { kind: 'opening'; cents?: number | null };
 
 function Workspace({ account, proMode, role, userName, onRoleChange, live, userId, orgId, onBack, backLabel }: WorkspaceProps) {
   const [tab, setTab] = useState('home');
@@ -258,10 +273,12 @@ function Workspace({ account, proMode, role, userName, onRoleChange, live, userI
   };
 
   const balanceCents = useMemo(() => data.openingCents + ops.reduce((sum, o) => sum + signed(o), 0), [data.openingCents, ops]);
+  const habitual = useMemo(() => habitualFlows(ops, planning.recurrings, todayKey(), personal), [ops, planning.recurrings, personal]);
   const forecast = useMemo(
-    () => computeForecast({ balanceCents, recurrings: planning.recurrings, invoices, today: todayKey() }),
-    [balanceCents, planning.recurrings, invoices],
+    () => computeForecast({ balanceCents, recurrings: planning.recurrings, invoices, today: todayKey(), habitual }),
+    [balanceCents, planning.recurrings, invoices, habitual],
   );
+  const monthly = useMemo(() => monthlyBudget(ops, planning.recurrings, todayKey()), [ops, planning.recurrings]);
   const alerts = useMemo(
     () =>
       buildAlerts({
@@ -294,6 +311,212 @@ function Workspace({ account, proMode, role, userName, onRoleChange, live, userI
 
   const navItems = personal ? PERSONAL_NAV : isEmployee ? EMPLOYEE_NAV : proNav(proMode);
   const activeTab = navItems.some((n) => n.id === tab) ? tab : 'home';
+
+  // ───── Pilot : « Dis Pilot… » ─────
+  const pilotEnv = (): PilotEnv => ({
+    account,
+    isEmployee,
+    navIds: navItems.map((n) => n.id),
+    today: todayKey(),
+    ops,
+    balanceCents,
+    forecast,
+    alerts,
+    budgets: planning.budgets,
+    monthly,
+    recurrings: planning.recurrings,
+    invoices,
+    categories: categoriesFor(account),
+    act: {
+      navigate: (id) => {
+        setSlide(null);
+        setTab(id);
+      },
+      editOp: (op) => setSheet({ kind: 'edit', op }),
+      deleteOp: async (id) => {
+        await data.remove(id);
+      },
+      openInvoice: (draft) => setSheet({ kind: 'invoice', draft: { ...draft, heard: pilotHeard.current } }),
+      settleInvoice,
+      setRecurringActive: planning.setRecurringActive,
+      removeRecurring: planning.removeRecurring,
+      openOpening: (cents) => setSheet({ kind: 'opening', cents }),
+      setDirectSave: changeDirectSave,
+    },
+  });
+  const pilotHeard = useRef('');
+  // ───── Informations manquantes : questions au milieu de l'écran (jamais le formulaire complet) ─────
+  const [missing, setMissing] = useState<Candidate | null>(null);
+  const missingRef = useRef<Candidate | null>(null);
+  missingRef.current = missing;
+  const askedRef = useRef<string | null>(null);
+  const [lastHeard, setLastHeard] = useState<{ text: string; ok: boolean } | null>(null);
+
+  /** Enregistre un ajout dont tout est connu : renvoie la réponse de Pilot (action immédiate + de quoi l'annuler). */
+  const commit = (c: Candidate): PilotReply => {
+    const cats = categoriesFor(account);
+    const cat = cats.find((x) => x.id === (c.kind === 'invoice' ? '' : c.categoryId));
+    const sign = (kind: 'depense' | 'recette') => (kind === 'depense' ? 'moins' : 'plus');
+    const done = (say: string, undo: () => Promise<string>) => ({ say, undo });
+    switch (c.kind) {
+      case 'op': {
+        const draft: OperationDraft = { kind: c.opKind, amountCents: c.amountCents!, categoryId: c.categoryId, label: c.label || cat!.label, date: c.date };
+        return {
+          say: 'Un instant…',
+          auto: async () => {
+            const id = await data.add(draft);
+            return done(`Enregistré : ${sign(draft.kind)} ${formatEuros(draft.amountCents)}, ${draft.label}.`, async () => {
+              await data.remove(id);
+              return 'Opération annulée.';
+            });
+          },
+        };
+      }
+      case 'recurring': {
+        const label = c.label || (c.word ? c.word.charAt(0).toUpperCase() + c.word.slice(1) : cat!.label);
+        return {
+          say: 'Un instant…',
+          auto: async () => {
+            const id = await planning.addRecurring({ label, kind: c.recKind, amountCents: c.amountCents!, categoryId: c.categoryId, dayOfMonth: c.dayOfMonth! });
+            return done(`Récurrence enregistrée : ${label}, ${sign(c.recKind)} ${formatEuros(c.amountCents!)} le ${c.dayOfMonth} de chaque mois.`, async () => {
+              await planning.removeRecurring(id);
+              return 'Récurrence annulée.';
+            });
+          },
+        };
+      }
+      case 'budget': {
+        const previous = planning.budgets.get(c.categoryId) ?? null;
+        const next = c.remove ? null : c.amountCents!;
+        return {
+          say: 'Un instant…',
+          auto: async () => {
+            await planning.setBudget(c.categoryId, next);
+            return done(next ? `Budget ${cat!.label} fixé à ${formatEuros(next)}.` : `Budget ${cat!.label} retiré.`, async () => {
+              await planning.setBudget(c.categoryId, previous);
+              return 'Budget remis comme avant.';
+            });
+          },
+        };
+      }
+      case 'invoice':
+        return {
+          say: 'Un instant…',
+          auto: async () => {
+            const id = await planning.addInvoice({ counterparty: c.counterparty, label: c.label, amountCents: c.amountCents!, dueKey: c.dueKey!, direction: c.direction });
+            return done(`Facture enregistrée : ${c.counterparty}, ${formatEuros(c.amountCents!)}, échéance le ${c.dueKey!.split('-').reverse().join('/')}.`, async () => {
+              await planning.removeInvoice(id);
+              return 'Facture annulée.';
+            });
+          },
+        };
+    }
+  };
+
+  /**
+   * Commande de Pilot (après « Dis Pilot »). Quand TOUT est compris, l'ajout est fait tout de suite (« ding », bouton Annuler).
+   * S'il manque quelque chose, Pilot pose seulement la ou les questions utiles, au milieu de l'écran.
+   */
+  const dispatchPilot = (command: string): PilotReply => {
+    pilotHeard.current = command;
+    setMissing(null); // une nouvelle commande remplace une question restée sans réponse
+    const ignore: PilotReply = { say: '', silent: true };
+    const today = parisYMD(new Date());
+    const ask = (c: Candidate): PilotReply => {
+      const slots = missingSlots(c);
+      if (slots.length === 0) return commit(c);
+      setMissing(c);
+      return ignore;
+    };
+
+    const intent = parseIntent(command, { account, today });
+    if (intent) {
+      if (intent.type === 'opening' && !canEditOpening) return { say: 'Le solde de départ se règle sur un compte connecté, par le propriétaire ou le patron.' };
+      if (intent.type === 'invoice_new' && !isEmployee) {
+        const d = intent.draft;
+        return ask({ kind: 'invoice', heard: command, direction: d.direction, counterparty: d.counterparty, label: d.label, amountCents: d.amountCents, dueKey: d.dueKey });
+      }
+      return runIntent(intent, pilotEnv());
+    }
+
+    const cats = categoriesFor(account);
+    const p = parseCommand(command, account);
+    if (!p.amountCents && !p.categoryId && !p.budget && !p.recurring) {
+      return { say: `Je n'ai pas compris « ${command} ». Dites par exemple : j'ai dépensé 50 euros de carburant, ou : quel est mon solde.` };
+    }
+    const cat = cats.find((c) => c.id === p.categoryId);
+
+    if (p.budget) {
+      if (isEmployee || !personal) return { say: 'Les budgets par catégorie existent pour le compte particulier.' };
+      const ok = cat && cat.kind === 'depense' && !cat.fixed;
+      return ask({
+        kind: 'budget',
+        heard: command,
+        categoryId: ok ? cat.id : '',
+        amountCents: p.amountCents,
+        remove: p.budgetRemove,
+        note: cat?.fixed ? `${cat.label} est une charge fixe : elle se gère dans les récurrences. Quelle autre catégorie ?` : undefined,
+      });
+    }
+    if (p.recurring) {
+      if (isEmployee) return { say: NOT_FOR_EMPLOYEE_SAY };
+      return ask({
+        kind: 'recurring',
+        heard: command,
+        recKind: p.kind,
+        amountCents: p.amountCents,
+        categoryId: cat && cat.kind === p.kind ? cat.id : '',
+        label: p.label,
+        word: p.categoryWord,
+        dayOfMonth: p.dayOfMonth,
+      });
+    }
+    if (isEmployee && p.kind === 'recette') return { say: 'Un employé ne peut saisir que des dépenses.' };
+    const kind = isEmployee ? 'depense' : p.kind;
+    return ask({ kind: 'op', heard: command, opKind: kind, amountCents: p.amountCents, categoryId: cat && cat.kind === kind ? cat.id : '', label: p.label, date: p.date });
+  };
+
+  /** Une question est posée à l'écran : ce qui est dit en est la réponse (sans « Dis Pilot »). */
+  const answerPilot = (text: string): boolean => {
+    const c = missingRef.current;
+    if (!c) return false;
+    if (isNo(text)) {
+      setMissing(null);
+      return true;
+    }
+    const r = applyAnswer(c, text, { account, today: parisYMD(new Date()) });
+    setLastHeard({ text, ok: r.filled.length > 0 });
+    if (r.filled.length > 0) setMissing(r.candidate);
+    else {
+      const first = missingSlots(c)[0];
+      pilot.ask(`Je n'ai pas compris. ${QUESTIONS[first](c)}`);
+    }
+    return true;
+  };
+
+    const pilot = usePilot({ blocked: sheet !== null, dispatch: dispatchPilot, onAnswer: answerPilot });
+  useEffect(() => {
+    if (import.meta.env.DEV) (window as unknown as { __pilot?: unknown }).__pilot = { hear: pilot.hear };
+  });
+  useEffect(() => {
+    if (!missing) {
+      askedRef.current = null;
+      setLastHeard(null);
+      return;
+    }
+    const slots = missingSlots(missing);
+    if (slots.length === 0) {
+      // tout est là : on enregistre tout de suite
+      setMissing(null);
+      pilot.present(commit(missing), missing.heard);
+      return;
+    }
+    if (askedRef.current !== slots[0]) {
+      askedRef.current = slots[0];
+      pilot.ask(QUESTIONS[slots[0]](missing));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [missing]);
   /** Balayage horizontal : écran suivant (vers la gauche) ou précédent (vers la droite). */
   const onTouchStart = (e: React.TouchEvent) => {
     const t = e.touches[0];
@@ -341,6 +564,7 @@ function Workspace({ account, proMode, role, userName, onRoleChange, live, userI
           </div>
         </div>
         <div className="topbar-right">
+          <PilotPill pilot={pilot} onOpen={() => setSheet({ kind: 'pilot' })} />
           {onRoleChange && (
             <button className="role-toggle" onClick={() => switchRole(role === 'patron' ? 'employe' : 'patron')} title="Changer de vue">
               Vue : {role === 'patron' ? 'Patron' : 'Employé'}
@@ -376,7 +600,7 @@ function Workspace({ account, proMode, role, userName, onRoleChange, live, userI
                       onDemo={onDemo}
                       onEditOpening={onEditOpening}
                       onSeeAll={() => setTab('month')}
-                      budgets={planning.budgets}
+                      monthly={monthly}
                       alerts={alerts}
                       forecast={forecast}
                     />
@@ -419,18 +643,57 @@ function Workspace({ account, proMode, role, userName, onRoleChange, live, userI
         </main>
       </OperationSelectContext.Provider>
 
+      <PilotPanelCard pilot={pilot} />
+      {missing && (
+        <PilotDialog
+          candidate={missing}
+          categories={categoriesFor(account)}
+          onField={(key, value) => setMissing((m) => (m ? applyField(m, key, value) : m))}
+          onCancel={() => setMissing(null)}
+          status={pilot.state === 'paused' ? 'speaking' : pilot.state === 'busy' ? 'busy' : 'listening'}
+          level={pilot.level}
+          lastHeard={lastHeard}
+        />
+      )}
+
       <BottomNav items={navItems} active={activeTab} onSelect={(id) => { setSlide(null); setTab(id); }} onMic={openMic} />
 
       {sheet?.kind === 'op' && (
         <VoiceSheet
           account={account}
           mode={sheet.mode}
+          presetText={sheet.presetText}
+          onCommand={sheet.presetText ? undefined : (text) => parseIntent(text, { account, today: parisYMD(new Date()) }) !== null && (pilot.run(text), true)}
           expenseOnly={isEmployee}
           directSave={directSave}
           onDirectSaveChange={changeDirectSave}
           onConfirm={submitSheet}
           onDirect={saveDirect}
           onRecurring={(prefill) => setSheet({ kind: 'recurring', prefill })}
+          onBudget={personal ? (prefill) => setSheet({ kind: 'budget', prefill }) : undefined}
+          onClose={() => setSheet(null)}
+        />
+      )}
+      {sheet?.kind === 'pilot' && <PilotSheet pilot={pilot} onClose={() => setSheet(null)} />}
+      {sheet?.kind === 'invoice' && (
+        <InvoiceSheet
+          prefill={sheet.draft}
+          onSave={async (d) => {
+            await planning.addInvoice(d);
+            setToast({ text: 'Facture enregistrée' });
+          }}
+          onClose={() => setSheet(null)}
+        />
+      )}
+      {sheet?.kind === 'budget' && (
+        <BudgetSheet
+          prefill={sheet.prefill}
+          choices={categoriesFor(account).filter((c) => c.kind === 'depense' && !c.fixed)}
+          budgets={planning.budgets}
+          onSave={async (id, cents) => {
+            await planning.setBudget(id, cents);
+            setToast({ text: cents ? 'Budget enregistré' : 'Budget retiré' });
+          }}
           onClose={() => setSheet(null)}
         />
       )}
@@ -459,7 +722,7 @@ function Workspace({ account, proMode, role, userName, onRoleChange, live, userI
       )}
       {sheet?.kind === 'opening' && (
         <OpeningSheet
-          currentCents={data.openingCents}
+          currentCents={sheet.cents ?? data.openingCents}
           personal={personal}
           onSave={async (c) => {
             await data.setOpening(c);

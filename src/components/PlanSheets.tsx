@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { Category, Invoice, Recurring } from '../types';
+import type { InvoiceVoiceDraft } from '../voice/intents';
 import type { InvoiceDraft, RecurringDraft } from '../data/usePlanning';
 import { centsToInput, parseEurosToCents } from '../lib/money';
 import { dayKeyOfIso, todayKey } from '../lib/forecast';
@@ -77,7 +78,7 @@ function Footer({
 function useAction(onClose: () => void) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const run = async (fn: () => Promise<void>) => {
+  const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     setError(null);
     try {
@@ -118,7 +119,7 @@ interface RecurringProps {
   prefill?: RecurringPrefill;
   categories: Category[];
   professional: boolean;
-  onSave: (d: RecurringDraft) => Promise<void>;
+  onSave: (d: RecurringDraft) => Promise<unknown>;
   onToggleActive?: (active: boolean) => Promise<void>;
   onDelete?: () => Promise<void>;
   onClose: () => void;
@@ -202,17 +203,20 @@ export function RecurringSheet({ initial, prefill, categories, professional, onS
 
 interface InvoiceProps {
   initial?: Invoice;
-  onSave: (d: InvoiceDraft) => Promise<void>;
+  /** Ce que la dictée a compris (champs vides = à compléter). */
+  prefill?: InvoiceVoiceDraft & { heard: string };
+  onSave: (d: InvoiceDraft) => Promise<unknown>;
   onDelete?: () => Promise<void>;
   onClose: () => void;
 }
 
-export function InvoiceSheet({ initial, onSave, onDelete, onClose }: InvoiceProps) {
-  const [direction, setDirection] = useState<Invoice['direction']>(initial?.direction ?? 'a_encaisser');
-  const [counterparty, setCounterparty] = useState(initial?.counterparty ?? '');
-  const [label, setLabel] = useState(initial?.label ?? '');
-  const [amount, setAmount] = useState(initial ? centsToInput(initial.amountCents) : '');
-  const [dueKey, setDueKey] = useState(initial ? dayKeyOfIso(initial.dueDate) : todayKey());
+export function InvoiceSheet({ initial, prefill, onSave, onDelete, onClose }: InvoiceProps) {
+  const [direction, setDirection] = useState<Invoice['direction']>(initial?.direction ?? prefill?.direction ?? 'a_encaisser');
+  const [counterparty, setCounterparty] = useState(initial?.counterparty ?? prefill?.counterparty ?? '');
+  const [label, setLabel] = useState(initial?.label ?? prefill?.label ?? '');
+  const [amount, setAmount] = useState(initial ? centsToInput(initial.amountCents) : prefill?.amountCents ? centsToInput(prefill.amountCents) : '');
+  const [dueKey, setDueKey] = useState(initial ? dayKeyOfIso(initial.dueDate) : prefill?.dueKey ?? todayKey());
+  const missing = prefill ? [!prefill.counterparty && (prefill.direction === 'a_payer' ? 'le fournisseur' : 'le client'), !prefill.amountCents && 'le montant', !prefill.dueKey && 'la date d’échéance'].filter(Boolean) : [];
   const { busy, error, run } = useAction(onClose);
 
   const cents = parseEurosToCents(amount);
@@ -222,6 +226,8 @@ export function InvoiceSheet({ initial, onSave, onDelete, onClose }: InvoiceProp
 
   return (
     <Shell title={initial ? 'Modifier la facture' : 'Nouvelle facture ou échéance'} label="Facture" onClose={onClose}>
+      {prefill && <p className="phrase small">Entendu : « {prefill.heard} »</p>}
+      {missing.length > 0 && <p className="hint-warn">Je n’ai pas compris {missing.join(' ni ')} : complétez ci-dessous.</p>}
       <div className="segmented kind">
         <button className={direction === 'a_encaisser' ? 'on pos-on' : ''} onClick={() => setDirection('a_encaisser')}>
           À encaisser
@@ -250,30 +256,73 @@ export function InvoiceSheet({ initial, onSave, onDelete, onClose }: InvoiceProp
 
 /* ───────── Budget d'une catégorie ───────── */
 
+/** Ce que la dictée a compris d'un budget (champs vides = à compléter). */
+export interface BudgetPrefill {
+  heard: string;
+  categoryId: string;
+  amountCents: number | null;
+  remove: boolean;
+  /** Remarque à afficher (ex. « Logement est une charge fixe »). */
+  note?: string;
+}
+
 interface BudgetProps {
-  category: Category;
-  currentCents?: number;
-  onSave: (cents: number | null) => Promise<void>;
+  /** Catégorie déjà choisie (touche sur une ligne). Sinon, `choices` + liste déroulante. */
+  category?: Category;
+  choices?: Category[];
+  prefill?: BudgetPrefill;
+  budgets: Map<string, number>;
+  onSave: (categoryId: string, cents: number | null) => Promise<void>;
   onClose: () => void;
 }
 
-export function BudgetSheet({ category, currentCents, onSave, onClose }: BudgetProps) {
-  const [amount, setAmount] = useState(currentCents ? centsToInput(currentCents) : '');
+export function BudgetSheet({ category, choices = [], prefill, budgets, onSave, onClose }: BudgetProps) {
+  const [categoryId, setCategoryId] = useState(category?.id ?? prefill?.categoryId ?? '');
+  const [amount, setAmount] = useState(
+    prefill ? (prefill.amountCents ? centsToInput(prefill.amountCents) : '') : category && budgets.get(category.id) ? centsToInput(budgets.get(category.id)!) : '',
+  );
   const { busy, error, run } = useAction(onClose);
+
+  const selected = category ?? choices.find((c) => c.id === categoryId);
+  const currentCents = selected ? budgets.get(selected.id) : undefined;
   const empty = amount.trim() === '';
   const cents = parseEurosToCents(amount);
-  const valid = empty || cents !== null;
+  // Dictée « fixe le budget… » : le montant est obligatoire. Retrait : montant vide.
+  const mustHaveAmount = Boolean(prefill) && !prefill!.remove;
+  const valid = Boolean(selected) && (empty ? !mustHaveAmount : cents !== null);
+
+  const missing = prefill
+    ? [!prefill.categoryId && 'la catégorie', !prefill.remove && !prefill.amountCents && 'le montant'].filter(Boolean)
+    : [];
 
   return (
-    <Shell title={`Budget — ${category.label}`} label="Budget mensuel" onClose={onClose}>
+    <Shell title={selected ? `Budget — ${selected.label}` : 'Budget mensuel'} label="Budget mensuel" onClose={onClose}>
+      {prefill && <p className="phrase small">Entendu : « {prefill.heard} »</p>}
+      {prefill?.note && <p className="hint-warn">{prefill.note}</p>}
+      {!prefill?.note && missing.length > 0 && <p className="hint-warn">Je n’ai pas compris {missing.join(' ni ')} : complétez ci-dessous.</p>}
+      {!category && (
+        <label className="field">
+          <span>Catégorie</span>
+          <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
+            <option value="" disabled>
+              Choisir une catégorie
+            </option>
+            {choices.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <p className="sim-note">Le plafond de dépenses que vous vous fixez chaque mois pour cette catégorie. Vous serez alerté à 85 % et au dépassement.</p>
-      <AmountField value={amount} onChange={setAmount} autoFocus />
-      <small className="muted">Laissez vide pour ne pas fixer de budget.</small>
+      <AmountField value={amount} onChange={setAmount} autoFocus={!prefill} />
+      <small className="muted">Laissez vide pour retirer le budget de cette catégorie.</small>
       <Footer
         busy={busy}
         valid={valid}
         error={error}
-        onSave={() => void run(() => onSave(empty ? null : cents))}
+        onSave={() => void run(() => onSave(selected!.id, empty ? null : cents))}
         onClose={onClose}
         saveLabel={empty && currentCents ? 'Retirer le budget' : 'Enregistrer'}
       />

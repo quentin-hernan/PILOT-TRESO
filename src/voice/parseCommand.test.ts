@@ -196,3 +196,35 @@ describe('récurrences dictées', () => {
     }
   });
 });
+
+describe('budgets dictés', () => {
+  const b = (t: string) => parseCommand(t, 'particulier', NOW);
+
+  it.each([
+    ['budget alimentation 400 euros', 'alimentation', 40000],
+    ['mets le budget restaurant à 100 euros', 'restaurant', 10000],
+    ["fixe un budget de 150 euros pour le carburant", 'carburant', 15000],
+    ['tous les mois budget loisirs 80 euros', 'loisirs', 8000],
+    ['plafond courses 350 euros', 'alimentation', 35000],
+  ])('« %s »', (phrase, cat, cents) => {
+    expect(b(phrase)).toMatchObject({ budget: true, budgetRemove: false, categoryId: cat, amountCents: cents, recurring: false });
+  });
+
+  it('retrait : « enlève le budget loisirs »', () => {
+    expect(b('enlève le budget loisirs')).toMatchObject({ budget: true, budgetRemove: true, categoryId: 'loisirs', amountCents: null });
+  });
+
+  it('catégorie ou montant manquant : à compléter', () => {
+    expect(b('budget 200 euros')).toMatchObject({ budget: true, categoryId: null, amountCents: 20000 });
+    expect(b('budget alimentation')).toMatchObject({ budget: true, categoryId: 'alimentation', amountCents: null });
+  });
+
+  it('une charge fixe est reconnue (pour être refusée en budget)', () => {
+    expect(b('budget logement 700 euros').categoryId).toBe('logement');
+  });
+
+  it('jamais pour une opération ordinaire ni pour le compte professionnel', () => {
+    expect(b("j'ai dépensé 50 euros de carburant").budget).toBe(false);
+    expect(parseCommand('budget carburant 100 euros', 'professionnel', NOW).budget).toBe(false);
+  });
+});
