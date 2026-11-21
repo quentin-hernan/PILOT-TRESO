@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { Category, Operation } from '../../types';
 import type { PlanningApi } from '../../data/usePlanning';
-import { PERSONAL_CATEGORIES } from '../../data/categories';
+import { FIXED_CATEGORY_IDS, PERSONAL_CATEGORIES } from '../../data/categories';
 import { formatEuros } from '../../lib/money';
 import { formatMonthTitle, parisYMD } from '../../lib/dates';
 import { byCategory, opsOfMonth } from '../../lib/stats';
@@ -13,11 +13,16 @@ export function PersonalCategories({ ops, planning }: { ops: Operation[]; planni
   const [editing, setEditing] = useState<Category | null>(null);
   const t = parisYMD(new Date());
   const monthOps = opsOfMonth(ops, t.y, t.m);
-  const spent = byCategory(monthOps, 'depense', PERSONAL_CATEGORIES);
+  // Les charges fixes (logement, électricité, crédit) sont des récurrences : ni budget ni répartition ici.
+  const spent = byCategory(
+    monthOps.filter((o) => !FIXED_CATEGORY_IDS.has(o.categoryId)),
+    'depense',
+    PERSONAL_CATEGORIES,
+  );
   const spentById = new Map(spent.map((s) => [s.category.id, s.cents]));
   const { budgets } = planning;
 
-  const expenseCats = PERSONAL_CATEGORIES.filter((c) => c.kind === 'depense');
+  const expenseCats = PERSONAL_CATEGORIES.filter((c) => c.kind === 'depense' && !c.fixed);
   const budgeted = expenseCats
     .filter((c) => budgets.get(c.id))
     .sort((a, b) => (spentById.get(b.id) ?? 0) / budgets.get(b.id)! - (spentById.get(a.id) ?? 0) / budgets.get(a.id)!);
@@ -33,6 +38,7 @@ export function PersonalCategories({ ops, planning }: { ops: Operation[]; planni
           <h3>Répartition des dépenses</h3>
         </div>
         <StackedShare items={spent} />
+        <p className="muted small">Hors charges fixes (logement, électricité, crédit) : elles sont gérées dans les récurrences.</p>
       </section>
 
       <section className="card">

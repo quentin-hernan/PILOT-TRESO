@@ -1,6 +1,6 @@
 import type { Operation } from '../../types';
 import type { Alert, Forecast } from '../../lib/forecast';
-import { PERSONAL_CATEGORIES } from '../../data/categories';
+import { FIXED_CATEGORY_IDS, PERSONAL_CATEGORIES } from '../../data/categories';
 import { formatEuros } from '../../lib/money';
 import { formatMonthTitle, parisYMD } from '../../lib/dates';
 import { opsOfMonth, signed, totals } from '../../lib/stats';
@@ -26,6 +26,11 @@ interface Props {
 
 export function PersonalHome({ ops, openingCents, onDemo, onEditOpening, onSeeAll, budgets, alerts, forecast }: Props) {
   const budgetTotal = [...budgets.values()].reduce((s, v) => s + v, 0);
+  // Le budget du mois porte sur les dépenses variables : les charges fixes sont des récurrences.
+  const t0 = parisYMD(new Date());
+  const variableExpense = opsOfMonth(ops, t0.y, t0.m)
+    .filter((o) => o.kind === 'depense' && !FIXED_CATEGORY_IDS.has(o.categoryId))
+    .reduce((s, o) => s + o.amountCents, 0);
   const t = parisYMD(new Date());
   const monthKey = t.y * 12 + t.m;
   const { income, expense } = totals(opsOfMonth(ops, t.y, t.m));
@@ -74,14 +79,14 @@ export function PersonalHome({ ops, openingCents, onDemo, onEditOpening, onSeeAl
         <div className="card-head">
           <h3>Budget du mois</h3>
           <span className="muted">
-            {formatEuros(expense)} / {formatEuros(budgetTotal)}
+            {formatEuros(variableExpense)} / {formatEuros(budgetTotal)}
           </span>
         </div>
-        <Progress value={expense} max={budgetTotal} />
+        <Progress value={variableExpense} max={budgetTotal} />
         <p className="muted small">
-          {expense <= budgetTotal
-            ? `Il vous reste ${formatEuros(budgetTotal - expense)} à dépenser dans le budget prévu.`
-            : `Budget dépassé de ${formatEuros(expense - budgetTotal)}.`}
+          {variableExpense <= budgetTotal
+            ? `Il vous reste ${formatEuros(budgetTotal - variableExpense)} à dépenser dans le budget prévu (hors charges fixes).`
+            : `Budget dépassé de ${formatEuros(variableExpense - budgetTotal)} (hors charges fixes).`}
         </p>
       </section>
 

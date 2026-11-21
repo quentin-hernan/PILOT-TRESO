@@ -345,8 +345,12 @@ code {
   font-size: 0.78rem;
   white-space: nowrap;
 }
+.card-head > .muted.small {
+  white-space: normal;
+  text-align: right;
+}
 .card-head h3 {
-  white-space: nowrap;
+  min-width: 0;
   font-size: 0.72rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -706,7 +710,7 @@ code {
   height: calc(var(--nav-h) + env(safe-area-inset-bottom));
   padding-bottom: env(safe-area-inset-bottom);
   display: grid;
-  grid-template-columns: 1fr 92px 1fr;
+  grid-template-columns: minmax(0, 1fr) 84px minmax(0, 1fr);
   background: var(--surface);
   border-top: 1px solid var(--line);
   z-index: 20;
@@ -723,7 +727,8 @@ code {
   align-items: center;
   justify-content: center;
   gap: 3px;
-  min-width: 60px;
+  min-width: 0;
+  flex: 1;
   color: var(--muted);
   font-size: 0.62rem;
   font-weight: 600;
@@ -1536,4 +1541,47 @@ code {
 .link-text {
   color: var(--brand);
   font-weight: 600;
+}
+
+/* Balayage entre écrans : l'écran arrive du côté d'où l'on tire */
+.screen.slide-left {
+  animation: slide-from-right 0.22s ease both;
+}
+.screen.slide-right {
+  animation: slide-from-left 0.22s ease both;
+}
+@keyframes slide-from-right {
+  from {
+    opacity: 0;
+    transform: translateX(28px);
+  }
+}
+@keyframes slide-from-left {
+  from {
+    opacity: 0;
+    transform: translateX(-28px);
+  }
+}
+
+/* Boutons d'action des fenêtres : toujours visibles en bas, même quand la fenêtre défile */
+.sheet .actions {
+  position: sticky;
+  bottom: calc(-24px - env(safe-area-inset-bottom));
+  margin: 4px 0 calc(-24px - env(safe-area-inset-bottom));
+  padding: 12px 0 calc(24px + env(safe-area-inset-bottom));
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  z-index: 2;
+}
+
+/* Petits écrans (360 px) : la barre du bas ne doit jamais dépasser la largeur de l'écran */
+@media (max-width: 400px) {
+  .nav-item {
+    letter-spacing: 0.01em;
+    font-size: 0.58rem;
+  }
+}
+html,
+body {
+  overflow-x: hidden;
 }

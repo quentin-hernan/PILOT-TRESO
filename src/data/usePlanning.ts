@@ -3,7 +3,7 @@ import type { AccountType, Invoice, ProRole, Recurring } from '../types';
 import { supabase } from '../lib/supabase';
 import { makeDate } from '../lib/dates';
 import { todayKey, ymdOfKey } from '../lib/forecast';
-import { PERSONAL_CATEGORIES } from './categories';
+import { FIXED_CATEGORY_IDS, PERSONAL_CATEGORIES } from './categories';
 import { initialInvoices, personalRecurrings, proRecurrings } from './mock';
 
 interface Options {
@@ -162,7 +162,7 @@ export function usePlanning({ live, account, userId, orgId, role, onRecurringApp
 
         if (cancelled) return;
         setSlugToId(s2i);
-        setBudgetMap(new Map(cats.data.filter((c) => c.budget_cents).map((c) => [c.slug as string, Number(c.budget_cents)])));
+        setBudgetMap(new Map(cats.data.filter((c) => c.budget_cents && !FIXED_CATEGORY_IDS.has(c.slug as string)).map((c) => [c.slug as string, Number(c.budget_cents)])));
         setRecurrings((recs.data as RecRow[]).map((r) => toRecurring(r, i2s)));
         setInvoices(invs ? (invs.data as InvRow[]).map(toInvoice) : []);
         setStatus('ready');

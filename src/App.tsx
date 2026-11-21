@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AccountType, Invoice, Operation, OperationDraft, ProMode, ProRole } from './types';
 import { useOperations } from './data/useOperations';
 import { usePlanning } from './data/usePlanning';
@@ -9,6 +9,7 @@ import { useAuth } from './auth/AuthProvider';
 import { BottomNav, type NavItem } from './components/BottomNav';
 import { VoiceSheet } from './components/VoiceSheet';
 import { OpeningSheet } from './components/OpeningSheet';
+import { RecurringSheet, type RecurringPrefill } from './components/PlanSheets';
 import { warmUpVoiceEngine } from './voice/recognizer';
 import { OperationSelectContext } from './components/OperationContext';
 import { formatEuros } from './lib/money';
@@ -159,6 +160,7 @@ interface WorkspaceProps {
 type SheetState =
   | { kind: 'op'; mode: 'voice' | 'manual' }
   | { kind: 'edit'; op: Operation }
+  | { kind: 'recurring'; prefill: RecurringPrefill }
   | { kind: 'opening' };
 
 function Workspace({ account, proMode, role, userName, onRoleChange, live, userId, orgId, onBack, backLabel }: WorkspaceProps) {
@@ -287,8 +289,34 @@ function Workspace({ account, proMode, role, userName, onRoleChange, live, userI
     setToast({ text: incoming ? 'Encaissement enregistré' : 'Paiement enregistré' });
   };
 
+  const swipe = useRef<{ x: number; y: number; ok: boolean } | null>(null);
+  const [slide, setSlide] = useState<'left' | 'right' | null>(null);
+
   const navItems = personal ? PERSONAL_NAV : isEmployee ? EMPLOYEE_NAV : proNav(proMode);
   const activeTab = navItems.some((n) => n.id === tab) ? tab : 'home';
+  /** Balayage horizontal : écran suivant (vers la gauche) ou précédent (vers la droite). */
+  const onTouchStart = (e: React.TouchEvent) => {
+    const t = e.touches[0];
+    const target = e.target as HTMLElement;
+    // pas de balayage depuis un champ, un menu ou une zone qui défile elle-même horizontalement
+    const blocked = target.closest('input, select, textarea, .sheet, [data-noswipe]') !== null;
+    swipe.current = e.touches.length === 1 && !blocked ? { x: t.clientX, y: t.clientY, ok: true } : null;
+  };
+  const onTouchEnd = (e: React.TouchEvent) => {
+    const s = swipe.current;
+    swipe.current = null;
+    if (!s || sheet) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - s.x;
+    const dy = t.clientY - s.y;
+    if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.6) return;
+    const i = navItems.findIndex((n) => n.id === activeTab);
+    const next = navItems[i + (dx < 0 ? 1 : -1)];
+    if (!next) return;
+    setSlide(dx < 0 ? 'left' : 'right');
+    setTab(next.id);
+  };
+
   const employeeOps = ops.filter((o) => o.author === 'employe');
   const onDemo = live ? undefined : demo;
   const onEditOpening = canEditOpening ? () => setSheet({ kind: 'opening' }) : undefined;
@@ -328,7 +356,12 @@ function Workspace({ account, proMode, role, userName, onRoleChange, live, userI
       {planning.error && <p className="live-banner">{planning.error}</p>}
 
       <OperationSelectContext.Provider value={(op) => setSheet({ kind: 'edit', op })}>
-        <main className="screen" key={`${account}-${role}-${activeTab}`}>
+        <main
+          className={`screen ${slide ? `slide-${slide}` : ''}`}
+          key={`${account}-${role}-${activeTab}`}
+          onTouchStart={onTouchStart}
+          onTouchEnd={onTouchEnd}
+        >
           {data.status === 'loading' && <p className="empty">Chargement de vos opérations…</p>}
           {data.status === 'error' && <p className="form-error">{data.error}</p>}
 
@@ -386,7 +419,7 @@ function Workspace({ account, proMode, role, userName, onRoleChange, live, userI
         </main>
       </OperationSelectContext.Provider>
 
-      <BottomNav items={navItems} active={activeTab} onSelect={setTab} onMic={openMic} />
+      <BottomNav items={navItems} active={activeTab} onSelect={(id) => { setSlide(null); setTab(id); }} onMic={openMic} />
 
       {sheet?.kind === 'op' && (
         <VoiceSheet
@@ -397,6 +430,19 @@ function Workspace({ account, proMode, role, userName, onRoleChange, live, userI
           onDirectSaveChange={changeDirectSave}
           onConfirm={submitSheet}
           onDirect={saveDirect}
+          onRecurring={(prefill) => setSheet({ kind: 'recurring', prefill })}
+          onClose={() => setSheet(null)}
+        />
+      )}
+      {sheet?.kind === 'recurring' && (
+        <RecurringSheet
+          prefill={sheet.prefill}
+          categories={categoriesFor(account)}
+          professional={!personal}
+          onSave={async (d) => {
+            await planning.addRecurring(d);
+            setToast({ text: 'Récurrence enregistrée' });
+          }}
           onClose={() => setSheet(null)}
         />
       )}

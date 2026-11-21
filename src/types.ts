@@ -15,6 +15,8 @@ export interface Category {
   kind: OperationKind;
   /** Budget mensuel en centimes (compte particulier, dépenses uniquement). */
   budgetCents?: number;
+  /** Charge fixe (loyer, électricité, crédit) : gérée par les récurrences, donc sans budget ni répartition. */
+  fixed?: boolean;
 }
 
 /** Tous les montants sont des entiers en centimes. */

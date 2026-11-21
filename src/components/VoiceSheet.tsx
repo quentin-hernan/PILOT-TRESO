@@ -25,6 +25,7 @@ import {
   type VoiceRecognizer,
 } from '../voice/recognizer';
 import { Icon } from './Icon';
+import type { RecurringPrefill } from './PlanSheets';
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const ymdToStr = (p: YMD) => `${p.y}-${pad(p.m)}-${pad(p.d)}`;
@@ -48,6 +49,8 @@ interface Props {
   onConfirm: (draft: OperationDraft) => Promise<void>;
   /** Enregistrement direct (sans confirmation). */
   onDirect?: (draft: OperationDraft) => Promise<void>;
+  /** Phrase de type « tous les mois… » : ouvre la fenêtre de récurrence, pré-remplie (jamais enregistrée directement). */
+  onRecurring?: (prefill: RecurringPrefill) => void;
   onDelete?: () => Promise<void>;
   onClose: () => void;
 }
@@ -61,6 +64,7 @@ export function VoiceSheet({
   onDirectSaveChange,
   onConfirm,
   onDirect,
+  onRecurring,
   onDelete,
   onClose,
 }: Props) {
@@ -98,8 +102,8 @@ export function VoiceSheet({
 
   const recognizer = useRef<VoiceRecognizer | null>(null);
   // Les rappels du moteur de reconnaissance ne doivent pas rester figés sur d'anciennes valeurs.
-  const latest = useRef({ directSave, expenseOnly, onDirect });
-  latest.current = { directSave, expenseOnly, onDirect };
+  const latest = useRef({ directSave, expenseOnly, onDirect, onRecurring });
+  latest.current = { directSave, expenseOnly, onDirect, onRecurring };
 
   /** Utilise la meilleure variante proposée par le moteur : la première qui donne montant + catégorie. */
   const analyse = useCallback(
@@ -113,6 +117,19 @@ export function VoiceSheet({
   const handleFinal = useCallback(
     async (text: string, alternatives: string[]) => {
       const p = analyse(text, alternatives);
+      if (p.recurring && latest.current.onRecurring && !latest.current.expenseOnly) {
+        const cat = categories.find((c) => c.id === p.categoryId);
+        const word = p.categoryWord ? p.categoryWord.charAt(0).toUpperCase() + p.categoryWord.slice(1) : '';
+        latest.current.onRecurring({
+          heard: p.transcript,
+          kind: p.kind,
+          amountCents: p.amountCents,
+          categoryId: cat && cat.kind === p.kind ? cat.id : '',
+          label: p.label || word || cat?.label || '',
+          dayOfMonth: p.dayOfMonth,
+        });
+        return;
+      }
       const forcedKind: OperationKind = latest.current.expenseOnly ? 'depense' : p.kind;
       const dayStr = ymdToStr(parisYMD(p.date));
 
@@ -346,7 +363,10 @@ export function VoiceSheet({
                     Test du micro : dites par exemple « {hint} ». <b>Rien ne sera enregistré.</b>
                   </span>
                 ) : (
-                  <span className="muted small">Parlez, puis marquez une courte pause (ou appuyez sur Terminer).</span>
+                  <span className="muted small">
+                    Parlez, puis marquez une courte pause (ou appuyez sur Terminer).
+                    {!expenseOnly && <> Pour une récurrence, dites par exemple « tous les mois, le 2, loyer 750 euros ».</>}
+                  </span>
                 )}
               </p>
             )}

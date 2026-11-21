@@ -20,6 +20,12 @@ export interface ParsedCommand {
   dateExplicit: boolean;
   /** Libellé détecté (ex. « chez Total »), vide sinon. */
   label: string;
+  /** Mot de la catégorie tel que dit (ex. « loyer », « Crédit »), vide si aucune catégorie. */
+  categoryWord: string;
+  /** Phrase de type « tous les mois… » : c'est une récurrence, pas une opération ponctuelle. */
+  recurring: boolean;
+  /** Jour du mois dit pour une récurrence (« le 2 de chaque mois »), null sinon. */
+  dayOfMonth: number | null;
 }
 
 /* ───────── Normalisation ───────── */
@@ -189,19 +195,19 @@ function detectKind(text: string): OperationKind | null {
   return i < e ? 'recette' : 'depense';
 }
 
-function detectCategory(text: string, account: AccountType, kind: OperationKind | null): string | null {
+function detectCategory(text: string, account: AccountType, kind: OperationKind | null): { id: string; word: string } | null {
   const categories = account === 'particulier' ? PERSONAL_CATEGORIES : PRO_CATEGORIES;
-  let best: { id: string; len: number; pos: number } | null = null;
+  let best: { id: string; len: number; pos: number; word: string } | null = null;
   for (const [id, words] of Object.entries(CATEGORY_KEYWORDS[account])) {
     const cat = categories.find((c) => c.id === id);
     if (!cat || (kind && cat.kind !== kind)) continue;
     for (const w of words) {
       const m = new RegExp(`\\b${w}\\b`).exec(text);
       if (!m) continue;
-      if (!best || w.length > best.len || (w.length === best.len && m.index < best.pos)) best = { id, len: w.length, pos: m.index };
+      if (!best || w.length > best.len || (w.length === best.len && m.index < best.pos)) best = { id, len: w.length, pos: m.index, word: w };
     }
   }
-  return best?.id ?? null;
+  return best ? { id: best.id, word: best.word } : null;
 }
 
 /** « chez Total » -> « Total » (depuis le texte d'origine, pour garder les majuscules). */
@@ -213,28 +219,87 @@ function detectLabel(transcript: string): string {
   return label ? label.charAt(0).toUpperCase() + label.slice(1) : '';
 }
 
+/* ───────── Récurrence (« tous les mois… ») ───────── */
+
+const RECURRING_PHRASES: RegExp[] = [
+  /\b(?:tous|chaque) (?:les )?mois\b/g,
+  /\bpar mois\b/g,
+  /\bmensuel(?:le|les|lement)?\b/g,
+  /\brecurrent(?:e|es|s)?\b/g,
+  /\brecurrence\b/g,
+  /\bchaque (?:le )?\d{1,2}(?:er)?\b(?!\s*(?:euros?|eur|%))/g,
+  /\btous les \d{1,2}(?:er)? (?:du mois\b)?/g,
+];
+
+/** Jour du mois dit avec la phrase de récurrence. Renvoie aussi le texte restant sans ces expressions. */
+function extractRecurrence(text: string): { recurring: boolean; day: number | null; rest: string } {
+  const recurring = RECURRING_PHRASES.some((re) => new RegExp(re.source).test(text));
+  if (!recurring) return { recurring: false, day: null, rest: text };
+
+  const dayPatterns: { re: RegExp; day: (m: RegExpMatchArray) => number }[] = [
+    { re: /\b(?:le|du|au)\s+(\d{1,2})(?:er|e)?\s+(?:de |du )?(?:chaque |tous les )?mois\b/, day: (m) => parseInt(m[1], 10) },
+    { re: /\b(?:chaque|tous les)\s+(?:le\s+)?(\d{1,2})(?:er)?\b(?!\s*(?:euros?|eur|%|h\b|heures?))/, day: (m) => parseInt(m[1], 10) },
+    { re: /\b(?:en )?fin (?:de|du) mois\b/, day: () => 31 },
+    { re: /\b(?:en )?debut (?:de|du) mois\b/, day: () => 1 },
+    { re: /\bmilieu (?:de|du) mois\b/, day: () => 15 },
+    { re: /\ble premier\b/, day: () => 1 },
+    { re: /\ble\s+(\d{1,2})(?:er)?\b(?!\s*(?:euros?|eur|%|h\b|heures?))/, day: (m) => parseInt(m[1], 10) },
+  ];
+  let day: number | null = null;
+  let rest = text;
+  for (const p of dayPatterns) {
+    const m = rest.match(p.re);
+    if (!m) continue;
+    const d = p.day(m);
+    if (d >= 1 && d <= 31) {
+      day = d;
+      rest = rest.replace(p.re, ' ');
+      break;
+    }
+  }
+  for (const re of RECURRING_PHRASES) rest = rest.replace(re, ' ');
+  return { recurring: true, day, rest: rest.replace(/\s+/g, ' ').trim() };
+}
+
+/** Retrouve, dans la phrase d'origine, les mots (avec leurs accents) qui correspondent au mot-clé de la catégorie. */
+function originalWords(transcript: string, keyword: string): string {
+  const words = transcript.split(/\s+/);
+  const n = keyword.split(' ').length;
+  for (let i = 0; i + n <= words.length; i++) {
+    const chunk = words.slice(i, i + n).join(' ');
+    if (normalize(chunk) === keyword) return chunk.replace(/[.,;!?]+$/g, '');
+  }
+  return keyword;
+}
+
 /* ───────── Point d'entrée ───────── */
 
 export function parseCommand(transcript: string, account: AccountType, now: Date = new Date()): ParsedCommand {
   const normalized = normalize(transcript);
   const today = parisYMD(now);
 
-  const { ymd, rest } = parseDate(normalized, today);
+  const rec = extractRecurrence(normalized);
+  // Une récurrence n'a pas de date d'opération : « le 2 » est le jour du mois, pas une date passée.
+  const { ymd, rest } = rec.recurring ? { ymd: null, rest: rec.rest } : parseDate(normalized, today);
   const amountCents = parseAmount(rest);
 
   const explicitKind = detectKind(rest);
-  let categoryId = detectCategory(rest, account, explicitKind);
+  let found = detectCategory(rest, account, explicitKind);
   let kind: OperationKind = explicitKind ?? 'depense';
   if (!explicitKind) {
     // Pas de verbe : la catégorie décide (« salaire » -> recette).
     const any = detectCategory(rest, account, null);
     if (any) {
       const cats = account === 'particulier' ? PERSONAL_CATEGORIES : PRO_CATEGORIES;
-      kind = cats.find((c) => c.id === any)!.kind;
-      categoryId = any;
+      kind = cats.find((c) => c.id === any.id)!.kind;
+      found = any;
+    } else if (rec.recurring && /\b(tombe|tombent|rentre|rentrent|arrive|arrivent|verse|versent|credite)\b/.test(rest)) {
+      // « tous les mois j'ai 2 500 euros qui tombent » : de l'argent qui arrive.
+      kind = 'recette';
     }
   }
   if (hasWord(rest, 'achete') && !explicitKind) kind = 'depense';
+  const categoryId = found?.id ?? null;
 
   const date = !ymd || cmp(ymd, today) === 0 ? now.toISOString() : makeDate(ymd.y, ymd.m, ymd.d).toISOString();
 
@@ -247,5 +312,8 @@ export function parseCommand(transcript: string, account: AccountType, now: Date
     date,
     dateExplicit: ymd !== null,
     label: detectLabel(transcript),
+    categoryWord: found ? originalWords(transcript, found.word) : '',
+    recurring: rec.recurring,
+    dayOfMonth: rec.day,
   };
 }

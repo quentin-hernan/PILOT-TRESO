@@ -155,3 +155,44 @@ describe('normalisation', () => {
     expect(normalize("J'ai payé 2 500 € d'électricité")).toBe('j ai paye 2500 euros d electricite');
   });
 });
+
+describe('récurrences dictées', () => {
+  const rec = (t: string, account: 'particulier' | 'professionnel' = 'particulier') => parseCommand(t, account, NOW);
+
+  it.each([
+    ['tous les mois le 2 loyer 750 euros', { amountCents: 75000, categoryId: 'logement', dayOfMonth: 2, kind: 'depense' }],
+    ['le 2 de chaque mois loyer 750 euros', { amountCents: 75000, categoryId: 'logement', dayOfMonth: 2, kind: 'depense' }],
+    ['chaque 5 crédit auto 265 euros', { amountCents: 26500, categoryId: 'credit', dayOfMonth: 5, kind: 'depense' }],
+    ['tous les mois le 1er je reçois mon salaire de 2 500 euros', { amountCents: 250000, categoryId: 'salaire', dayOfMonth: 1, kind: 'recette' }],
+    ['abonnement netflix 13,99 euros chaque mois le 3', { amountCents: 1399, categoryId: 'abonnements', dayOfMonth: 3, kind: 'depense' }],
+    ['mensuel 45 euros de mutuelle le 28', { amountCents: 4500, categoryId: 'sante', dayOfMonth: 28, kind: 'depense' }],
+    ['en fin de mois tous les mois 120 euros assurance habitation', { amountCents: 12000, categoryId: 'logement', dayOfMonth: 31, kind: 'depense' }],
+  ])('« %s »', (phrase, expected) => {
+    expect(rec(phrase)).toMatchObject({ recurring: true, ...expected });
+  });
+
+  it('« tous les mois j\'ai 800 euros qui tombent » : recette, jour et catégorie à compléter', () => {
+    expect(rec("tous les mois j'ai 800 euros qui tombent")).toMatchObject({ recurring: true, kind: 'recette', amountCents: 80000, dayOfMonth: null, categoryId: null });
+  });
+
+  it('le jour dit n\'est pas pris pour un montant ni pour une date passée', () => {
+    const r = rec('chaque 5 loyer 750 euros');
+    expect(r.amountCents).toBe(75000);
+    expect(r.dateExplicit).toBe(false);
+  });
+
+  it('professionnel : « tous les mois le 9 assurance pro 118 euros »', () => {
+    expect(rec('tous les mois le 9 assurance pro 118 euros', 'professionnel')).toMatchObject({ recurring: true, dayOfMonth: 9, amountCents: 11800, categoryId: 'assurances' });
+  });
+
+  it('garde le mot dit, avec ses accents, pour le libellé', () => {
+    expect(rec('chaque mois le 5 crédit auto 265 euros').categoryWord).toBe('crédit');
+    expect(rec('tous les mois le 2 loyer 750 euros').categoryWord).toBe('loyer');
+  });
+
+  it('une opération ordinaire n\'est jamais une récurrence', () => {
+    for (const p of ["j'ai dépensé 50 euros de carburant", "j'ai payé mon abonnement netflix 13 euros", "j'ai payé 75 euros d'électricité le 15 novembre", 'hier 20 euros de courses']) {
+      expect(rec(p).recurring).toBe(false);
+    }
+  });
+});

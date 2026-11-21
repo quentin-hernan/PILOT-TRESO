@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import type { Category, Invoice, Recurring } from '../types';
 import type { InvoiceDraft, RecurringDraft } from '../data/usePlanning';
 import { centsToInput, parseEurosToCents } from '../lib/money';
@@ -12,7 +13,8 @@ function Shell({ title, label, children, onClose }: { title: string; label: stri
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
-  return (
+  // Affichée directement dans <body> : une fenêtre dessinée à l'intérieur d'un écran animé resterait sous la barre du bas.
+  return createPortal(
     <div className="sheet-backdrop" onClick={onClose}>
       <div className="sheet" role="dialog" aria-modal="true" aria-label={label} onClick={(e) => e.stopPropagation()}>
         <div className="review">
@@ -20,7 +22,8 @@ function Shell({ title, label, children, onClose }: { title: string; label: stri
           {children}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -100,8 +103,19 @@ const AmountField = ({ value, onChange, autoFocus }: { value: string; onChange: 
 
 /* ───────── Récurrence ───────── */
 
+/** Ce que la dictée a compris d'une récurrence (champs vides = à compléter). */
+export interface RecurringPrefill {
+  heard: string;
+  kind: Recurring['kind'];
+  amountCents: number | null;
+  categoryId: string;
+  label: string;
+  dayOfMonth: number | null;
+}
+
 interface RecurringProps {
   initial?: Recurring;
+  prefill?: RecurringPrefill;
   categories: Category[];
   professional: boolean;
   onSave: (d: RecurringDraft) => Promise<void>;
@@ -110,12 +124,12 @@ interface RecurringProps {
   onClose: () => void;
 }
 
-export function RecurringSheet({ initial, categories, professional, onSave, onToggleActive, onDelete, onClose }: RecurringProps) {
-  const [kind, setKind] = useState<Recurring['kind']>(initial?.kind ?? 'depense');
-  const [label, setLabel] = useState(initial?.label ?? '');
-  const [amount, setAmount] = useState(initial ? centsToInput(initial.amountCents) : '');
-  const [categoryId, setCategoryId] = useState(initial?.categoryId ?? '');
-  const [day, setDay] = useState(String(initial?.dayOfMonth ?? new Date().getDate()));
+export function RecurringSheet({ initial, prefill, categories, professional, onSave, onToggleActive, onDelete, onClose }: RecurringProps) {
+  const [kind, setKind] = useState<Recurring['kind']>(initial?.kind ?? prefill?.kind ?? 'depense');
+  const [label, setLabel] = useState(initial?.label ?? prefill?.label ?? '');
+  const [amount, setAmount] = useState(initial ? centsToInput(initial.amountCents) : prefill?.amountCents ? centsToInput(prefill.amountCents) : '');
+  const [categoryId, setCategoryId] = useState(initial?.categoryId ?? prefill?.categoryId ?? '');
+  const [day, setDay] = useState(initial ? String(initial.dayOfMonth) : prefill ? (prefill.dayOfMonth ? String(prefill.dayOfMonth) : '') : String(new Date().getDate()));
   const { busy, error, run } = useAction(onClose);
 
   const cats = categories.filter((c) => c.kind === kind);
@@ -124,11 +138,22 @@ export function RecurringSheet({ initial, categories, professional, onSave, onTo
   const dayNum = Number(day);
   const valid = cents !== null && label.trim() !== '' && effectiveCategory !== '' && Number.isInteger(dayNum) && dayNum >= 1 && dayNum <= 31;
 
+  const missing = prefill
+    ? [
+        !prefill.amountCents && 'le montant',
+        !prefill.categoryId && 'la catégorie',
+        !prefill.dayOfMonth && 'le jour du mois',
+        !prefill.label && 'le libellé',
+      ].filter(Boolean)
+    : [];
+
   const save = () =>
     run(() => onSave({ label: label.trim(), kind, amountCents: cents!, categoryId: effectiveCategory, dayOfMonth: dayNum }));
 
   return (
     <Shell title={initial ? 'Modifier la récurrence' : 'Nouvelle récurrence'} label="Récurrence" onClose={onClose}>
+      {prefill && <p className="phrase small">Entendu : « {prefill.heard} »</p>}
+      {missing.length > 0 && <p className="hint-warn">Je n’ai pas compris {missing.join(' ni ')} : complétez ci-dessous.</p>}
       <div className="segmented kind">
         <button className={kind === 'depense' ? 'on neg-on' : ''} onClick={() => setKind('depense')}>
           {professional ? 'Décaissement' : 'Dépense'}
