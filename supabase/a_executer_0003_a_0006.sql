@@ -8,7 +8,7 @@
 --  1. la mémoire de la dernière date générée pour chaque récurrence ;
 --  2. la fonction qui crée les opérations récurrentes arrivées à échéance.
 
-alter table public.recurrences add column last_applied date;
+alter table public.recurrences add column if not exists last_applied date;
 
 -- Crée les opérations des récurrences actives dont la date est passée (jusqu'à aujourd'hui, heure de Paris).
 --  * « security invoker » : s'exécute avec les droits de l'utilisateur connecté, donc les règles de sécurité
@@ -17,7 +17,7 @@ alter table public.recurrences add column last_applied date;
 --    jamais deux fois la même opération ;
 --  * rattrapage limité à 24 mois ; un jour 31 devient le dernier jour des mois plus courts.
 -- Renvoie le nombre d'opérations créées.
-create function public.apply_recurrences() returns integer
+create or replace function public.apply_recurrences() returns integer
 language plpgsql security invoker set search_path = public as $$
 declare
   r        record;
@@ -92,8 +92,8 @@ revoke all on function public.seed_personal_categories(uuid) from public;
 -- Les comptes existants n'ont pas de date (colonne vide) : leur solde continue de compter toutes les opérations
 -- jusqu'à ce que vous renseigniez à nouveau le solde de départ.
 
-alter table public.profiles      add column opening_date date;
-alter table public.organizations add column opening_date date;
+alter table public.profiles      add column if not exists opening_date date;
+alter table public.organizations add column if not exists opening_date date;
 
 grant update (display_name, opening_balance_cents, opening_date) on public.profiles to authenticated;
 grant update (name, opening_balance_cents, opening_date) on public.organizations to authenticated;
@@ -107,7 +107,7 @@ grant update (name, opening_balance_cents, opening_date) on public.organizations
 -- « À venir », compte dans le disponible du mois et dans les prévisions, puis devient une vraie opération le 28
 -- (créée automatiquement à l'ouverture de l'application, comme les récurrences).
 
-create table public.planned_operations (
+create table if not exists public.planned_operations (
   id           uuid primary key default gen_random_uuid(),
   owner_id     uuid references auth.users (id) on delete cascade,
   org_id       uuid references public.organizations (id) on delete cascade,
@@ -120,20 +120,21 @@ create table public.planned_operations (
   created_at   timestamptz not null default now(),
   constraint planned_one_owner check ((owner_id is null) <> (org_id is null))
 );
-create index planned_owner_idx on public.planned_operations (owner_id, planned_date);
-create index planned_org_idx   on public.planned_operations (org_id, planned_date);
+create index if not exists planned_owner_idx on public.planned_operations (owner_id, planned_date);
+create index if not exists planned_org_idx   on public.planned_operations (org_id, planned_date);
 
 alter table public.planned_operations enable row level security;
 grant select, insert, update, delete on public.planned_operations to authenticated;
 
 -- propriétaire (particulier) ou patron (professionnel) uniquement : un employé n'y a pas accès
+drop policy if exists planned_all on public.planned_operations;
 create policy planned_all on public.planned_operations for all to authenticated
   using (owner_id = auth.uid() or public.is_org_patron(org_id))
   with check (owner_id = auth.uid() or public.is_org_patron(org_id));
 
 -- Transforme en vraies opérations les opérations prévues dont la date est arrivée (jusqu'à aujourd'hui, heure de Paris).
 -- « security invoker » : les règles de sécurité s'appliquent ; chaque ligne est verrouillée, donc jamais créée deux fois.
-create function public.apply_planned() returns integer
+create or replace function public.apply_planned() returns integer
 language plpgsql security invoker set search_path = public as $$
 declare
   r       record;
