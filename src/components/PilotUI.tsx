@@ -51,7 +51,15 @@ export function PilotPanelCard({ pilot }: { pilot: PilotApi }) {
               <i key={i} style={{ height: `${6 + (pilot.level >= i ? 8 + pilot.level * 4 : 0)}px` }} />
             ))}
           </span>
-          <strong>Je vous écoute…</strong>
+          <span className="pilot-listen-text">
+            <strong>Je vous écoute…</strong>
+            {p.interim && <small>« {p.interim} »</small>}
+          </span>
+          {pilot.talking && (
+            <button className="btn btn-ghost btn-small" onClick={pilot.stopTalking}>
+              Terminer
+            </button>
+          )}
         </div>
       ) : (
         <div className="pilot-panel-body">
@@ -64,6 +72,14 @@ export function PilotPanelCard({ pilot }: { pilot: PilotApi }) {
             </span>
           ) : (
             <strong>{p.say}</strong>
+          )}
+          {p.offer && (
+            <div className="pilot-actions">
+              <button className="btn btn-primary btn-small" onClick={() => pilot.acceptOffer()}>
+                <Icon name="repeat" size={14} /> {p.offer}
+              </button>
+              <small className="muted">ou dites « répète »</small>
+            </div>
           )}
           {p.undoable && (
             <div className="pilot-actions">
@@ -309,7 +325,23 @@ export function PilotSheet({ pilot, onClose }: { pilot: PilotApi; onClose: () =>
 
           {!secure && <p className="form-error">Le micro est bloqué sur cette page (adresse non sécurisée). Utilisez l’adresse https:// du site.</p>}
 
-          {secure && !cached && (
+          {pilot.browserAvailable && (
+            <div className="field">
+              <span>Moteur de l’écoute permanente</span>
+              <select value={pilot.listenEngine} onChange={(e) => pilot.setListenEngine(e.target.value as 'ondevice' | 'browser')}>
+                <option value="ondevice">Sur l’appareil — privé (plus lent, surtout sur téléphone)</option>
+                <option value="browser">Navigateur — rapide (le son passe par Google ou Apple)</option>
+              </select>
+              <small className="muted">
+                {pilot.listenEngine === 'browser'
+                  ? 'Rapide et précis : « Dis Pilot » est reconnu pendant que vous parlez. Tout ce qui est dit pendant que l’écoute est active est envoyé à Google (Chrome, Android) ou Apple (Safari) pour être transcrit. Sur Android, un petit bip peut accompagner chaque relance.'
+                  : 'Le son reste sur l’appareil.'}
+                {pilot.weakDevice && pilot.listenEngine === 'ondevice' && ' Sur téléphone, ce mode est lent : le bouton micro en bas de l’écran reste le plus rapide.'}
+              </small>
+            </div>
+          )}
+
+          {secure && !cached && pilot.listenEngine === 'ondevice' && (
             <>
               <p className="sim-note">
                 Pour écouter en continu sans envoyer votre voix à personne, Pilot utilise le moteur vocal <b>sur l’appareil</b> : téléchargement unique d’environ{' '}
@@ -322,7 +354,7 @@ export function PilotSheet({ pilot, onClose }: { pilot: PilotApi; onClose: () =>
             </>
           )}
 
-          {secure && cached && (
+          {secure && (cached || pilot.listenEngine === 'browser') && (
             <label className="switch">
               <input type="checkbox" checked={pilot.enabled} onChange={(e) => pilot.setEnabled(e.target.checked)} />
               <span>Écoute permanente « Dis Pilot »</span>
@@ -369,7 +401,7 @@ export function PilotSheet({ pilot, onClose }: { pilot: PilotApi; onClose: () =>
 
           <p className="sim-note">
             <b>À savoir :</b> l’application doit rester ouverte et l’écran allumé (les navigateurs coupent le micro en veille). Le son est transcrit sur
-            l’appareil, jamais envoyé ni conservé ; Pilot ne retient rien de ce qu’il entend. L’écoute permanente consomme de la batterie : désactivez-la quand vous n’en avez pas besoin.
+            l’appareil, jamais envoyé ni conservé ; Pilot ne retient rien de ce qu’il entend. L’écoute permanente consomme de la batterie : désactivez-la quand vous n’en avez pas besoin. Sans elle, appuyez simplement sur le micro en bas de l’écran : Pilot écoute une commande tout de suite, avec les mêmes pouvoirs.
           </p>
 
           <label className="field">

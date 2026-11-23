@@ -1,5 +1,5 @@
 import type { Forecast } from '../lib/forecast';
-import { diffDays, todayKey, ymdOfKey } from '../lib/forecast';
+import { addDaysKey, diffDays, todayKey, ymdOfKey } from '../lib/forecast';
 import { formatEuros, formatEurosRound, formatSigned } from '../lib/money';
 import { Icon } from './Icon';
 import type { Alert } from '../lib/forecast';
@@ -32,7 +32,6 @@ function Curve({ series }: { series: number[] }) {
 
 export function ForecastCard({ forecast, professional }: { forecast: Forecast; professional: boolean }) {
   const today = todayKey();
-  const upcoming = forecast.events.filter((e) => e.date > today || e.source === 'facture').slice(0, 5);
   const negative = forecast.low.balanceCents < 0;
   return (
     <section className="card">
@@ -54,21 +53,6 @@ export function ForecastCard({ forecast, professional }: { forecast: Forecast; p
         {diffDays(today, forecast.low.date) > 0 ? ` le ${shortDate(forecast.low.date)}` : " aujourd'hui"}
       </p>
 
-      {upcoming.length > 0 && (
-        <>
-          <h4 className="fc-sub">Prochains mouvements prévus</h4>
-          <ul className="fc-events">
-            {upcoming.map((e, i) => (
-              <li key={`${e.date}-${i}`}>
-                <span className="muted">{shortDate(e.date)}</span>
-                <span className="fc-label">{e.label}</span>
-                <b className={e.cents < 0 ? 'neg' : 'pos'}>{formatSigned(e.cents)}</b>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-
       <p className="muted small">
         Calculé à partir du solde actuel, de vos récurrences{professional ? ', de vos factures en attente' : ''} et de vos dépenses habituelles
         {forecast.habitual
@@ -79,6 +63,50 @@ export function ForecastCard({ forecast, professional }: { forecast: Forecast; p
         {forecast.overdueReceivableCents > 0 &&
           ` ${formatEuros(forecast.overdueReceivableCents)} de factures à encaisser en retard ne sont pas comptés.`}
       </p>
+    </section>
+  );
+}
+
+/** « À venir » : les prochaines dépenses et recettes (récurrences, opérations prévues, factures), par date. */
+export function UpcomingCard({ events, today, onRemovePlanned }: { events: Forecast['events']; today: string; onRemovePlanned?: (id: string) => void }) {
+  const horizon = addDaysKey(today, 31);
+  const list = events.filter((e) => e.date >= today && e.date <= horizon).slice(0, 8);
+  const monthEnd = today.slice(0, 7);
+  const monthTotal = events.filter((e) => e.date > today && e.date.slice(0, 7) === monthEnd).reduce((s, e) => s + e.cents, 0);
+  const TAG: Record<string, string> = { recurrence: 'récurrent', facture: 'facture', prevu: 'prévu' };
+  return (
+    <section className="card upcoming">
+      <div className="card-head">
+        <h3>À venir</h3>
+        <span className="muted">31 prochains jours</span>
+      </div>
+      {list.length === 0 ? (
+        <p className="empty">Rien de prévu dans les 31 prochains jours.</p>
+      ) : (
+        <ul className="fc-events">
+          {list.map((e, i) => (
+            <li key={`${e.date}-${e.label}-${i}`}>
+              <span className="muted">{shortDate(e.date)}</span>
+              <span className="fc-label">
+                {e.label} <em className={`tag tag-${e.source}`}>{TAG[e.source]}</em>
+              </span>
+              <b className={e.cents < 0 ? 'neg' : 'pos'}>
+                {formatSigned(e.cents)}
+                {e.source === 'prevu' && e.id && onRemovePlanned && (
+                  <button className="mini-x" aria-label="Supprimer cette opération prévue" onClick={() => onRemovePlanned(e.id!)}>
+                    ×
+                  </button>
+                )}
+              </b>
+            </li>
+          ))}
+        </ul>
+      )}
+      {list.length > 0 && (
+        <p className="muted small">
+          D'ici la fin du mois : <b className={monthTotal < 0 ? 'neg' : 'pos'}>{formatSigned(monthTotal)}</b>
+        </p>
+      )}
     </section>
   );
 }

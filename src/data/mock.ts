@@ -1,4 +1,4 @@
-import type { Invoice, Operation, ProRole, Recurring } from '../types';
+import type { Invoice, Operation, PlannedOp, ProRole, Recurring } from '../types';
 import { daysInMonth, makeDate, parisYMD, shiftMonth } from '../lib/dates';
 
 /** Report du mois précédent (compte particulier), en centimes. */
@@ -95,6 +95,11 @@ export const personalRecurrings: Recurring[] = [
 export const proRecurrings: Recurring[] = [
   { id: 'pr1', label: 'Assurance pro', amountCents: 11_800, kind: 'depense', categoryId: 'assurances', dayOfMonth: 9, active: true },
   { id: 'pr2', label: 'Forfait mobile', amountCents: 2_999, kind: 'depense', categoryId: 'telephone', dayOfMonth: 16, active: true },
+];
+
+/** Une dépense prévue d'exemple (démonstration), dans une dizaine de jours. */
+export const initialPlanned = (): PlannedOp[] => [
+  { id: 'pl1', kind: 'depense', amountCents: 65_000, categoryId: 'logement', label: 'Taxe foncière', date: new Date(Date.now() + 9 * 86_400_000).toISOString().slice(0, 10) },
 ];
 
 function dueIn(days: number): string {

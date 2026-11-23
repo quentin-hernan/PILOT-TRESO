@@ -9,22 +9,22 @@ import type { AccountType } from '../types';
 export const CATEGORY_KEYWORDS: Record<AccountType, Record<string, string[]>> = {
   particulier: {
     // recettes
-    salaire: ['salaire', 'paie', 'fiche de paie', 'traitement'],
+    salaire: ['salaire', 'ma paie', 'la paie', 'fiche de paie', 'traitement'],
     'autre-recette': ['remboursement', 'cadeau', 'prime', 'allocation', 'allocations', 'caf', 'pension'],
     // dépenses
-    logement: ['loyer', 'logement', 'charges', 'copropriete', 'assurance habitation'],
+    logement: ['loyer', 'logement', 'charges', 'copropriete', 'assurance habitation', 'assurance', 'assurances', 'taxe fonciere'],
     alimentation: [
       'courses', 'course', 'supermarche', 'carrefour', 'leclerc', 'auchan', 'lidl', 'intermarche', 'boulangerie',
       'marche', 'nourriture', 'alimentation', 'epicerie', 'boucherie', 'fruits', 'legumes', 'primeur',
     ],
     carburant: ['carburant', 'essence', 'gasoil', 'gazole', 'diesel', 'plein', 'sp95', 'sp98'],
     restaurant: ['restaurant', 'resto', 'restau', 'pizzeria', 'brasserie', 'burger', 'mcdo', 'kebab', 'sushi', 'repas', 'cafe'],
-    electricite: ['electricite', 'edf', 'courant', 'electrique', 'gaz', 'energie', 'engie'],
-    abonnements: ['abonnement', 'abonnements', 'netflix', 'spotify', 'canal', 'disney', 'amazon prime', 'youtube', 'forfait', 'internet', 'box'],
+    electricite: ['electricite', 'edf', 'courant', 'electrique', 'gaz', 'energie', 'engie', 'eau', 'veolia', 'suez'],
+    abonnements: ['abonnement', 'abonnements', 'netflix', 'spotify', 'canal', 'disney', 'amazon prime', 'youtube', 'forfait', 'internet', 'box', 'telephone', 'mobile', 'portable'],
     loisirs: ['loisir', 'loisirs', 'cinema', 'sortie', 'concert', 'sport', 'jeux', 'jeu', 'theatre', 'musee'],
     sante: ['sante', 'pharmacie', 'medecin', 'docteur', 'dentiste', 'mutuelle', 'medicament', 'medicaments', 'hopital', 'opticien', 'kine'],
     transport: ['transport', 'transports', 'train', 'sncf', 'bus', 'metro', 'tram', 'navigo', 'pass', 'taxi', 'uber', 'parking', 'peage', 'autoroute'],
-    credit: ['credit', 'pret', 'emprunt', 'mensualite'],
+    credit: ['credit', 'pret', 'emprunt', 'mensualite', 'immobilier'],
   },
   professionnel: {
     // encaissements

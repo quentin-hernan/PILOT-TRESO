@@ -267,6 +267,7 @@ function detectLabel(transcript: string): string {
 const RECURRING_PHRASES: RegExp[] = [
   /\b(?:tous|chaque) (?:les )?mois\b/g,
   /\bpar mois\b/g,
+  /\ble \d{1,2}(?:er)? (?:de |du )(?:chaque |tous les )?mois\b(?! (?:dernier|precedent|prochain))/g,
   /\bmensuel(?:le|les|lement)?\b/g,
   /\brecurrent(?:e|es|s)?\b/g,
   /\brecurrence\b/g,
@@ -275,8 +276,8 @@ const RECURRING_PHRASES: RegExp[] = [
 ];
 
 /** Jour du mois dit avec la phrase de récurrence. Renvoie aussi le texte restant sans ces expressions. */
-function extractRecurrence(text: string): { recurring: boolean; day: number | null; rest: string } {
-  const recurring = RECURRING_PHRASES.some((re) => new RegExp(re.source).test(text));
+function extractRecurrence(text: string, force = false): { recurring: boolean; day: number | null; rest: string } {
+  const recurring = force || RECURRING_PHRASES.some((re) => new RegExp(re.source).test(text));
   if (!recurring) return { recurring: false, day: null, rest: text };
 
   const dayPatterns: { re: RegExp; day: (m: RegExpMatchArray) => number }[] = [
@@ -315,6 +316,25 @@ function originalWords(transcript: string, keyword: string): string {
   return keyword;
 }
 
+/**
+ * Catégories qui reviennent d'elles-mêmes chaque mois (salaire, loyer, crédit, énergie, abonnements, assurances, téléphone).
+ * Sert à repérer les phrases « de fond » et à proposer de répéter une opération chaque mois.
+ */
+export const RECURRING_TYPICAL: ReadonlySet<string> = new Set(['salaire', 'logement', 'credit', 'electricite', 'abonnements', 'assurances', 'telephone', 'energie']);
+
+/**
+ * Phrase « de fond » : « mon salaire est de 2 000 euros le 1er », « je touche 2 000 euros de salaire », « mon loyer est de 600 euros ».
+ * C'est une récurrence, même sans « tous les mois » — mais seulement pour une catégorie qui revient chaque mois, et jamais au passé
+ * (« j'ai reçu mon salaire de 2 500 euros » reste une opération du jour).
+ */
+function isStanding(t: string, categoryId: string | null): boolean {
+  if (!categoryId || !RECURRING_TYPICAL.has(categoryId)) return false;
+  if (/\b(j ai|je viens de|vient de|hier|avant hier|ce matin|ce soir|aujourd hui|ai recu|ai paye|ai touche|a ete|ont ete)\b/.test(t)) return false;
+  const named = /\b(mon|ma|mes|le|la|les)\s+(salaire|loyer|credit|pret|assurance|assurances|mutuelle|abonnement|forfait|edf|electricite|eau|telephone|internet|mensualite)\b.*\b(est|fait|de|c est)\b/;
+  const verb = /\bje (touche|recois|gagne|paie|paye|rembourse|verse|prends)\b/;
+  return named.test(t) || verb.test(t);
+}
+
 /* ───────── Point d'entrée ───────── */
 
 export function parseCommand(transcript: string, account: AccountType, now: Date = new Date()): ParsedCommand {
@@ -324,7 +344,8 @@ export function parseCommand(transcript: string, account: AccountType, now: Date
   // « budget alimentation 400 euros » : un budget est déjà mensuel, « tous les mois » n'en fait pas une récurrence.
   const budget = account === 'particulier' && /\b(budget|plafond|enveloppe)\b/.test(normalized);
   const budgetRemove = budget && /\b(enleve|enlever|retire|retirer|supprime|supprimer|efface|effacer|annule|annuler)\b/.test(normalized);
-  const rec = extractRecurrence(normalized);
+  let rec = extractRecurrence(normalized);
+  if (!rec.recurring && !budget && isStanding(normalized, detectCategory(normalized, account, null)?.id ?? null)) rec = extractRecurrence(normalized, true);
   if (budget) rec.recurring = false;
   // Une récurrence n'a pas de date d'opération : « le 2 » est le jour du mois, pas une date passée.
   const { ymd, rest } = rec.recurring || budget ? { ymd: null, rest: rec.rest } : parseDate(normalized, today);

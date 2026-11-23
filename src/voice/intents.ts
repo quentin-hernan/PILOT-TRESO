@@ -26,6 +26,7 @@ export type Intent =
   | { type: 'help' }
   | { type: 'navigate'; target: NavTarget }
   | { type: 'ask_balance' }
+  | { type: 'ask_available' }
   | { type: 'ask_spent'; kind: 'depense' | 'recette'; categoryId: string | null; period: Period }
   | { type: 'ask_upcoming'; days: number }
   | { type: 'ask_forecast'; days: 30 | 60 | 90 }
@@ -172,8 +173,13 @@ export function parseIntent(transcript: string, ctx: IntentContext): Intent | nu
   }
 
   // Solde de départ
-  if (has(t, /\bsolde (de depart|initial)\b/) && has(t, /\b(mets|met|mettre|modifie|modifier|fixe|fixer|regle|regler|change|changer|est de|c est|a)\b/)) {
-    return { type: 'opening', amountCents: parseAmount(t) };
+  const setsOpening =
+    (has(t, /\bsolde (de depart|initial)\b/) && has(t, /\b(mets|met|mettre|modifie|modifier|fixe|fixer|regle|regler|change|changer|renseigne|renseigner|saisis|est de|est a|c est|a)\b/)) ||
+    // « mon solde actuel est de 250 euros »
+    (has(t, /\bsolde( actuel)?\b/) && has(t, /\b(est de|est a|est egal a|fixe|fixer|mets|met|mettre|regle|regler|renseigne|renseigner)\b/) && HAS_AMOUNT.test(t) && !QUESTION.test(t));
+  if (setsOpening) {
+    const cents = parseAmount(t);
+    return { type: 'opening', amountCents: cents !== null && has(t, /\b(moins|negatif|decouvert)\b/) ? -cents : cents };
   }
 
   // Dernière opération
@@ -232,6 +238,9 @@ export function parseIntent(transcript: string, ctx: IntentContext): Intent | nu
   }
 
   if (has(t, /\balertes?\b/) && (asks || has(t, /\b(des|y a|ai je|j ai)\b/)) && !NAV_VERBS.test(t)) return { type: 'ask_alerts' };
+
+  // « disponible du mois » : ce qui restera à la fin du mois une fois les récurrences passées
+  if (has(t, /\bdisponible\b/) && !NAV_VERBS.test(t)) return { type: 'ask_available' };
 
   // « solde » est parfois transcrit « sol » (fin de mot coupée)
   if ((has(t, /\b(solde|tresorerie)\b/) || has(t, /\b(mon|le) sol\b/)) && !NAV_VERBS.test(t)) return { type: 'ask_balance' };

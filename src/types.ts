@@ -59,6 +59,17 @@ export interface Recurring {
   lastApplied?: string;
 }
 
+/** Opération ponctuelle PRÉVUE à une date future (devient une vraie opération ce jour-là). */
+export interface PlannedOp {
+  id: string;
+  kind: OperationKind;
+  amountCents: number;
+  categoryId: string;
+  label: string;
+  /** AAAA-MM-JJ */
+  date: string;
+}
+
 export interface OperationDraft {
   kind: OperationKind;
   amountCents: number;

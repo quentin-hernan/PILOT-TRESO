@@ -21,7 +21,7 @@ export {
   ondeviceContinuous,
   type ContinuousEvents,
 } from './ondeviceRecognizer';
-export { isBrowserEngineAvailable } from './browserRecognizer';
+export { browserContinuous, isBrowserEngineAvailable } from './browserRecognizer';
 
 export type VoiceEngine = 'browser' | 'ondevice';
 

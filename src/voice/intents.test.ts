@@ -204,3 +204,71 @@ describe("catégories avec petite faute d'orthographe du moteur vocal", () => {
     for (const w of ['bonjour', 'maison', 'voiture', 'fromage']) expect(perso(w).categoryId).toBeNull();
   });
 });
+
+describe('document « Application » : récurrences et solde de départ à la voix', () => {
+  const rec = (t: string) => parseCommand(t, 'particulier', new Date('2026-11-23T09:00:00Z'));
+
+  it.each([
+    ['tous les mois le 1er salaire 2000 euros', 'salaire', 200000, 1, 'recette'],
+    ['loyer 600 euros le 5 du mois', 'logement', 60000, 5, 'depense'],
+    ['EDF 80 euros le 10 du mois', 'electricite', 8000, 10, 'depense'],
+    ['eau 20 euros le 12 du mois', 'electricite', 2000, 12, 'depense'],
+    ['crédit immobilier 900 euros le 15 du mois', 'credit', 90000, 15, 'depense'],
+    ['téléphone 30 euros le 26 du mois', 'abonnements', 3000, 26, 'depense'],
+    ['assurance 80 euros le 28 du mois', 'logement', 8000, 28, 'depense'],
+  ])('« %s »', (phrase, cat, cents, day, kind) => {
+    expect(rec(phrase)).toMatchObject({ recurring: true, categoryId: cat, amountCents: cents, dayOfMonth: day, kind });
+  });
+
+  it('« le 10 du mois dernier » n\'est pas une récurrence', () => {
+    expect(rec("j'ai payé 50 euros de courses le 10 du mois dernier").recurring).toBe(false);
+  });
+
+  it('solde de départ à la voix', () => {
+    expect(perso('mets mon solde de départ à 250 euros')).toEqual({ type: 'opening', amountCents: 25000 });
+    expect(perso('mon solde de départ est de 250 euros')).toEqual({ type: 'opening', amountCents: 25000 });
+    expect(perso('mon solde actuel est de 250 euros')).toEqual({ type: 'opening', amountCents: 25000 });
+    expect(perso('mon solde de départ est de moins 200 euros')).toEqual({ type: 'opening', amountCents: -20000 });
+    expect(perso('je renseigne mon solde de départ')).toEqual({ type: 'opening', amountCents: null });
+  });
+
+  it('une question sur le solde reste une question', () => {
+    expect(perso('quel est mon solde actuel')?.type).toBe('ask_balance');
+    expect(perso('quel est mon solde')?.type).toBe('ask_balance');
+  });
+
+  it('disponible du mois', () => {
+    expect(perso('quel est mon disponible du mois')).toEqual({ type: 'ask_available' });
+    expect(perso('combien il me reste de disponible')).toEqual({ type: 'ask_available' });
+  });
+});
+
+describe('phrases « de fond » : salaire, loyer… = récurrence', () => {
+  const rec = (x: string) => parseCommand(x, 'particulier', new Date('2026-11-23T09:00:00Z'));
+
+  it.each([
+    ['mon salaire est de 2000 euros le 1er', 'salaire', 200000, 1],
+    ['mon loyer est de 600 euros le 5', 'logement', 60000, 5],
+    ['je touche 2000 euros de salaire le 1er', 'salaire', 200000, 1],
+    ['je paie 80 euros d\'EDF le 10', 'electricite', 8000, 10],
+    ['mon crédit est de 900 euros le 15', 'credit', 90000, 15],
+    ['mon assurance est de 80 euros le 28', 'logement', 8000, 28],
+  ])('« %s » : récurrence', (phrase, cat, cents, day) => {
+    expect(rec(phrase)).toMatchObject({ recurring: true, categoryId: cat, amountCents: cents, dayOfMonth: day });
+  });
+
+  it('sans jour : récurrence, jour à demander', () => {
+    expect(rec('je touche 2000 euros de salaire')).toMatchObject({ recurring: true, kind: 'recette', amountCents: 200000, dayOfMonth: null });
+  });
+
+  it('au passé : opération du jour, pas une récurrence', () => {
+    for (const p of ['j\'ai reçu mon salaire de 2500 euros', 'j\'ai payé mon loyer 750 euros', 'j\'ai touché 2000 euros de salaire', 'hier j\'ai payé 80 euros d\'EDF']) {
+      expect(rec(p).recurring).toBe(false);
+    }
+  });
+
+  it('une dépense courante au présent n\'est pas une récurrence', () => {
+    expect(rec('je paie 50 euros de courses').recurring).toBe(false);
+    expect(rec('je prends 40 euros de carburant').recurring).toBe(false);
+  });
+});

@@ -3,20 +3,21 @@ import type { Alert, Forecast } from '../../lib/forecast';
 import { PRO_CATEGORIES } from '../../data/categories';
 import { formatEuros } from '../../lib/money';
 import { formatMonthTitle, parisYMD } from '../../lib/dates';
-import { opsOfMonth, signed, totals } from '../../lib/stats';
+import { opsOfMonth, totals } from '../../lib/stats';
 import { Hero } from '../../components/Hero';
 import { DemoBar } from '../../components/DemoBar';
 import { OperationList } from '../../components/OperationList';
 import { Icon } from '../../components/Icon';
-import { AlertsCard, ForecastCard } from '../../components/ForecastCard';
+import { AlertsCard, ForecastCard, UpcomingCard } from '../../components/ForecastCard';
+import { todayKey } from '../../lib/forecast';
 import { InvoiceRow } from './Invoices';
 
 interface Props {
   ops: Operation[];
   invoices: Invoice[];
   mode: ProMode;
-  /** Solde de départ (centimes). */
-  openingCents: number;
+  /** Solde actuel (centimes) : solde de départ + opérations depuis ce jour. */
+  balanceCents: number;
   /** Fournis seulement en démonstration. */
   onDemo?: (kind: 'depense' | 'recette') => void;
   onEditOpening?: () => void;
@@ -24,12 +25,14 @@ interface Props {
   onSeeFlows: () => void;
   alerts: Alert[];
   forecast: Forecast;
+  /** Supprime une opération prévue. */
+  onRemovePlanned?: (id: string) => void;
 }
 
-export function ProHome({ ops, invoices, mode, openingCents, onDemo, onEditOpening, onSeeInvoices, onSeeFlows, alerts, forecast }: Props) {
+export function ProHome({ ops, invoices, mode, balanceCents, onDemo, onEditOpening, onSeeInvoices, onSeeFlows, alerts, forecast, onRemovePlanned }: Props) {
   const t = parisYMD(new Date());
   const { income, expense } = totals(opsOfMonth(ops, t.y, t.m));
-  const balance = openingCents + ops.reduce((s, o) => s + signed(o), 0);
+  const balance = balanceCents;
   const upcoming = invoices.filter((i) => i.status === 'en_attente').sort((a, b) => a.dueDate.localeCompare(b.dueDate)).slice(0, 3);
 
   return (
@@ -61,6 +64,8 @@ export function ProHome({ ops, invoices, mode, openingCents, onDemo, onEditOpeni
       {onDemo && <DemoBar onAdd={onDemo} />}
 
       <AlertsCard alerts={alerts} />
+
+      <UpcomingCard events={forecast.events} today={todayKey()} onRemovePlanned={onRemovePlanned} />
 
       <ForecastCard forecast={forecast} professional />
 

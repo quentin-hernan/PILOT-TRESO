@@ -42,8 +42,8 @@ export function OpeningSheet({ currentCents, personal, onSave, onClose }: Props)
           <h3>Solde de départ</h3>
           <p className="sim-note">
             {personal
-              ? 'Le solde de votre compte au moment où vous commencez à utiliser PILOT’TRESO. Les opérations s’ajoutent ensuite à ce montant.'
-              : 'La trésorerie de votre entreprise au moment où vous commencez à utiliser PILOT’TRESO. Les opérations s’ajoutent ensuite à ce montant.'}
+              ? 'Le solde de votre compte AUJOURD’HUI. Il sert de point de départ : les opérations enregistrées avant aujourd’hui ne sont plus comptées, celles d’aujourd’hui et d’après s’y ajoutent.'
+              : 'La trésorerie de votre entreprise AUJOURD’HUI. Il sert de point de départ : les opérations enregistrées avant aujourd’hui ne sont plus comptées, celles d’aujourd’hui et d’après s’y ajoutent.'}
           </p>
           <label className="field">
             <span>Montant</span>

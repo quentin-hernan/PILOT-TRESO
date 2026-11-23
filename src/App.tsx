@@ -4,12 +4,12 @@ import { useOperations } from './data/useOperations';
 import { usePlanning } from './data/usePlanning';
 import { categoriesFor } from './data/categories';
 import { buildAlerts, forecast as computeForecast, todayKey } from './lib/forecast';
-import { signed } from './lib/stats';
-import { habitualFlows, monthlyBudget } from './lib/monthly';
+import { balanceSince, endOfMonthAvailable, habitualFlows, monthlyBudget } from './lib/monthly';
 import { usePilot } from './pilot/usePilot';
 import { runIntent, type PilotEnv, type PilotReply } from './pilot/execute';
 import { parseIntent, type InvoiceVoiceDraft } from './voice/intents';
-import { parseCommand } from './voice/parseCommand';
+import { parseCommand, RECURRING_TYPICAL } from './voice/parseCommand';
+import { detectPlanned } from './voice/planned';
 
 const NOT_FOR_EMPLOYEE_SAY = "Cette commande n'est pas disponible avec votre profil.";
 import { PilotDialog, PilotPanelCard, PilotPill, PilotSheet } from './components/PilotUI';
@@ -222,7 +222,7 @@ function Workspace({ account, proMode, role, userName, onRoleChange, live, userI
   const isEmployee = account === 'professionnel' && proMode === 'equipe' && role === 'employe';
   const personal = account === 'particulier';
   // Le solde de départ se règle côté propriétaire / patron (compte connecté uniquement).
-  const canEditOpening = Boolean(live) && !isEmployee;
+  const canEditOpening = !isEmployee;
 
   const demo = (kind: 'depense' | 'recette') => {
     const base = DEMO[kind];
@@ -233,7 +233,11 @@ function Workspace({ account, proMode, role, userName, onRoleChange, live, userI
     });
   };
 
-  const openMic = () => setSheet({ kind: 'op', mode: 'voice' });
+  // Le bouton micro écoute une commande tout de suite (mêmes pouvoirs que « Dis Pilot »). La toute première fois, la fenêtre
+  // de configuration (autorisation du micro, téléchargement éventuel du moteur) s'ouvre.
+  const openMic = () => {
+    if (pilot.talk() === 'needs-setup') setSheet({ kind: 'op', mode: 'voice' });
+  };
 
   /** Enregistrement direct : on enregistre tout de suite, avec un bouton Annuler pendant quelques secondes. */
   const saveDirect = async (draft: OperationDraft) => {
@@ -272,13 +276,16 @@ function Workspace({ account, proMode, role, userName, onRoleChange, live, userI
     setTab('home');
   };
 
-  const balanceCents = useMemo(() => data.openingCents + ops.reduce((sum, o) => sum + signed(o), 0), [data.openingCents, ops]);
+  // Solde actuel : le solde de départ est celui d'un jour précis, les opérations d'avant ne comptent plus
+  const balanceCents = useMemo(() => balanceSince(data.openingCents, data.openingDate, ops), [data.openingCents, data.openingDate, ops]);
+  // « Disponible du mois » : solde actuel + récurrences encore à passer jusqu'à la fin du mois
+  const endOfMonth = useMemo(() => endOfMonthAvailable(balanceCents, planning.recurrings, todayKey(), planning.planned), [balanceCents, planning.recurrings, planning.planned]);
   const habitual = useMemo(() => habitualFlows(ops, planning.recurrings, todayKey(), personal), [ops, planning.recurrings, personal]);
   const forecast = useMemo(
-    () => computeForecast({ balanceCents, recurrings: planning.recurrings, invoices, today: todayKey(), habitual }),
-    [balanceCents, planning.recurrings, invoices, habitual],
+    () => computeForecast({ balanceCents, recurrings: planning.recurrings, invoices, planned: planning.planned, today: todayKey(), habitual }),
+    [balanceCents, planning.recurrings, invoices, planning.planned, habitual],
   );
-  const monthly = useMemo(() => monthlyBudget(ops, planning.recurrings, todayKey()), [ops, planning.recurrings]);
+  const monthly = useMemo(() => monthlyBudget(ops, planning.recurrings, todayKey(), planning.planned), [ops, planning.recurrings, planning.planned]);
   const alerts = useMemo(
     () =>
       buildAlerts({
@@ -324,6 +331,7 @@ function Workspace({ account, proMode, role, userName, onRoleChange, live, userI
     alerts,
     budgets: planning.budgets,
     monthly,
+    endOfMonth,
     recurrings: planning.recurrings,
     invoices,
     categories: categoriesFor(account),
@@ -355,20 +363,39 @@ function Workspace({ account, proMode, role, userName, onRoleChange, live, userI
   /** Enregistre un ajout dont tout est connu : renvoie la réponse de Pilot (action immédiate + de quoi l'annuler). */
   const commit = (c: Candidate): PilotReply => {
     const cats = categoriesFor(account);
-    const cat = cats.find((x) => x.id === (c.kind === 'invoice' ? '' : c.categoryId));
+    const cat = cats.find((x) => x.id === (c.kind === 'invoice' || c.kind === 'opening' ? '' : c.categoryId));
     const sign = (kind: 'depense' | 'recette') => (kind === 'depense' ? 'moins' : 'plus');
+    const monthEndNow = (balance: number) => balance + endOfMonth.incomeToComeCents - endOfMonth.expenseToComeCents;
     const done = (say: string, undo: () => Promise<string>) => ({ say, undo });
     switch (c.kind) {
       case 'op': {
         const draft: OperationDraft = { kind: c.opKind, amountCents: c.amountCents!, categoryId: c.categoryId, label: c.label || cat!.label, date: c.date };
+        // salaire, loyer, crédit, énergie, abonnements… : ça revient chaque mois, on propose de le répéter
+        const day = parisYMD(draft.date).d;
+        const offer =
+          !isEmployee && RECURRING_TYPICAL.has(draft.categoryId)
+            ? {
+                label: `Répéter chaque mois (le ${day})`,
+                run: async () => {
+                  const rid = await planning.addRecurring({ label: draft.label, kind: draft.kind, amountCents: draft.amountCents, categoryId: draft.categoryId, dayOfMonth: day });
+                  return done(`Récurrence enregistrée : ${draft.label}, ${sign(draft.kind)} ${formatEuros(draft.amountCents)} le ${day} de chaque mois.`, async () => {
+                    await planning.removeRecurring(rid);
+                    return 'Récurrence annulée.';
+                  });
+                },
+              }
+            : undefined;
         return {
           say: 'Un instant…',
           auto: async () => {
             const id = await data.add(draft);
-            return done(`Enregistré : ${sign(draft.kind)} ${formatEuros(draft.amountCents)}, ${draft.label}.`, async () => {
-              await data.remove(id);
-              return 'Opération annulée.';
-            });
+            return {
+              ...done(`Enregistré : ${sign(draft.kind)} ${formatEuros(draft.amountCents)}, ${draft.label}.`, async () => {
+                await data.remove(id);
+                return 'Opération annulée.';
+              }),
+              offer,
+            };
           },
         };
       }
@@ -395,6 +422,37 @@ function Workspace({ account, proMode, role, userName, onRoleChange, live, userI
             return done(next ? `Budget ${cat!.label} fixé à ${formatEuros(next)}.` : `Budget ${cat!.label} retiré.`, async () => {
               await planning.setBudget(c.categoryId, previous);
               return 'Budget remis comme avant.';
+            });
+          },
+        };
+      }
+      case 'opening': {
+        const previousCents = data.openingCents;
+        const previousDate = data.openingDate;
+        return {
+          say: 'Un instant…',
+          auto: async () => {
+            await data.setOpening(c.amountCents!);
+            return done(
+              `Solde de départ enregistré : ${formatEuros(c.amountCents!)} aujourd'hui. Disponible fin de mois : ${formatEuros(monthEndNow(c.amountCents!))}.`,
+              async () => {
+                await data.setOpening(previousCents, previousDate);
+                return 'Solde de départ remis comme avant.';
+              },
+            );
+          },
+        };
+      }
+      case 'planned': {
+        const label = c.label || cat!.label;
+        const when = new Date(`${c.dateKey}T12:00:00Z`).toLocaleDateString('fr-FR', { timeZone: 'UTC', weekday: 'long', day: 'numeric', month: 'long' });
+        return {
+          say: 'Un instant…',
+          auto: async () => {
+            const id = await planning.addPlanned({ kind: c.opKind, amountCents: c.amountCents!, categoryId: c.categoryId, label, dateKey: c.dateKey });
+            return done(`Prévu le ${when} : ${sign(c.opKind)} ${formatEuros(c.amountCents!)}, ${label}. Il compte dans votre disponible du mois.`, async () => {
+              await planning.removePlanned(id);
+              return 'Opération prévue annulée.';
             });
           },
         };
@@ -431,7 +489,10 @@ function Workspace({ account, proMode, role, userName, onRoleChange, live, userI
 
     const intent = parseIntent(command, { account, today });
     if (intent) {
-      if (intent.type === 'opening' && !canEditOpening) return { say: 'Le solde de départ se règle sur un compte connecté, par le propriétaire ou le patron.' };
+      if (intent.type === 'opening') {
+        if (!canEditOpening) return { say: NOT_FOR_EMPLOYEE_SAY };
+        return ask({ kind: 'opening', heard: command, amountCents: intent.amountCents });
+      }
       if (intent.type === 'invoice_new' && !isEmployee) {
         const d = intent.draft;
         return ask({ kind: 'invoice', heard: command, direction: d.direction, counterparty: d.counterparty, label: d.label, amountCents: d.amountCents, dueKey: d.dueKey });
@@ -440,6 +501,12 @@ function Workspace({ account, proMode, role, userName, onRoleChange, live, userI
     }
 
     const cats = categoriesFor(account);
+    // « le 28, j'ai 80 euros d'assurance » : une dépense (ou recette) PRÉVUE à une date future, pas une opération d'aujourd'hui
+    const pl = isEmployee ? null : detectPlanned(command, account);
+    if (pl) {
+      const pc = cats.find((c) => c.id === pl.parsed.categoryId);
+      return ask({ kind: 'planned', heard: command, opKind: pl.parsed.kind, amountCents: pl.parsed.amountCents, categoryId: pc && pc.kind === pl.parsed.kind ? pc.id : '', label: pl.parsed.label, dateKey: pl.dateKey });
+    }
     const p = parseCommand(command, account);
     if (!p.amountCents && !p.categoryId && !p.budget && !p.recurring) {
       return { say: `Je n'ai pas compris « ${command} ». Dites par exemple : j'ai dépensé 50 euros de carburant, ou : quel est mon solde.` };
@@ -596,13 +663,15 @@ function Workspace({ account, proMode, role, userName, onRoleChange, live, userI
                   {activeTab === 'home' && (
                     <PersonalHome
                       ops={ops}
-                      openingCents={data.openingCents}
+                      balanceCents={balanceCents}
+                      endOfMonth={endOfMonth}
                       onDemo={onDemo}
                       onEditOpening={onEditOpening}
                       onSeeAll={() => setTab('month')}
                       monthly={monthly}
                       alerts={alerts}
                       forecast={forecast}
+                      onRemovePlanned={(id) => void planning.removePlanned(id)}
                     />
                   )}
                   {activeTab === 'month' && <PersonalMonth ops={ops} />}
@@ -618,7 +687,7 @@ function Workspace({ account, proMode, role, userName, onRoleChange, live, userI
                       ops={ops}
                       invoices={invoices}
                       mode={proMode}
-                      openingCents={data.openingCents}
+                      balanceCents={balanceCents}
                       onDemo={onDemo}
                       onEditOpening={onEditOpening}
                       onSeeInvoices={() => setTab('invoices')}

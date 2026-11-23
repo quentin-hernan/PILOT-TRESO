@@ -1,7 +1,7 @@
 import type { AccountType, Category, Invoice, Operation, Recurring } from '../types';
 import type { Alert, Forecast } from '../lib/forecast';
-import { answerAlerts, answerBalance, answerBudget, answerForecast, answerMonthly, answerSpent, answerUpcoming } from '../lib/answers';
-import type { MonthlyBudget } from '../lib/monthly';
+import { answerAlerts, answerAvailable, answerBalance, answerBudget, answerForecast, answerMonthly, answerSpent, answerUpcoming } from '../lib/answers';
+import type { EndOfMonth, MonthlyBudget } from '../lib/monthly';
 import { formatEuros } from '../lib/money';
 import { normalize } from '../voice/parseCommand';
 import type { Intent, InvoiceVoiceDraft, NavTarget } from '../voice/intents';
@@ -14,6 +14,8 @@ export interface AutoResult {
   /** Version courte lue à voix haute (« C'est fait. ») ; le texte complet reste affiché. */
   spoken?: string;
   undo?: () => Promise<string>;
+  /** Proposition faite juste après (ex. « Répéter chaque mois ») : un bouton, ou « répète » à la voix. */
+  offer?: { label: string; run: () => Promise<AutoResult> };
 }
 
 export interface PilotReply {
@@ -40,6 +42,8 @@ export interface PilotEnv {
   budgets: Map<string, number>;
   /** Budget du mois calculé (revenus − charges fixes). */
   monthly: MonthlyBudget;
+  /** Disponible du mois : solde actuel + récurrences à venir jusqu'à la fin du mois. */
+  endOfMonth: EndOfMonth;
   recurrings: Recurring[];
   invoices: Invoice[];
   categories: Category[];
@@ -121,6 +125,9 @@ export function runIntent(intent: Intent, env: PilotEnv): PilotReply {
 
     case 'ask_balance':
       return { say: answerBalance(env.balanceCents, env.forecast) };
+
+    case 'ask_available':
+      return { say: answerAvailable(env.endOfMonth, new Date(`${env.today}T12:00:00Z`).toLocaleDateString('fr-FR', { timeZone: 'UTC', month: 'long' })) };
 
     case 'ask_spent':
       return { say: answerSpent(env.ops, intent.kind, intent.period, env.today, catById(intent.categoryId), professional) };

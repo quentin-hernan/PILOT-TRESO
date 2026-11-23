@@ -34,4 +34,7 @@ export const isYes = (t: string): boolean => /^(oui|ouais|yes|ok|okay|d accord|c
 /** « annule », « oups », « c'est faux » : dit juste après une action de Pilot. */
 export const isUndo = (t: string): boolean => /^(annule|annuler|oups|c est faux|non c est faux|retire ca|supprime ca|efface ca|defais ca|pas ca)\b/.test(normalize(t));
 
+/** « répète », « chaque mois », « oui » : accepte la proposition faite par Pilot. */
+export const isRepeat = (t: string): boolean => /^(repete|repeter|oui repete|chaque mois|tous les mois|et chaque mois|oui chaque mois|oui|ok|d accord)\b/.test(normalize(t));
+
 export const isNo = (t: string): boolean => /^(non|nan|annule|annuler|laisse tomber|stop|surtout pas|pas du tout|ne fais rien)\b/.test(normalize(t));

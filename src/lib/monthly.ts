@@ -1,4 +1,4 @@
-import type { Operation, Recurring } from '../types';
+import type { Operation, PlannedOp, Recurring } from '../types';
 import { FIXED_CATEGORY_IDS } from '../data/categories';
 import { daysInMonth } from './dates';
 import { dayKeyOfIso, occurrences, ymdOfKey } from './forecast';
@@ -28,7 +28,7 @@ export interface MonthlyBudget {
   remainingCents: number;
 }
 
-export function monthlyBudget(ops: Operation[], recurrings: Recurring[], today: string): MonthlyBudget {
+export function monthlyBudget(ops: Operation[], recurrings: Recurring[], today: string, planned: PlannedOp[] = []): MonthlyBudget {
   const month = today.slice(0, 7);
   const monthOps = ops.filter((o) => dayKeyOfIso(o.date).slice(0, 7) === month);
   const monthEnd = `${month}-${String(daysInMonth(Number(month.slice(0, 4)), Number(month.slice(5, 7)))).padStart(2, '0')}`;
@@ -53,6 +53,13 @@ export function monthlyBudget(ops: Operation[], recurrings: Recurring[], today: 
     if (already) continue;
     if (r.kind === 'recette') incomeToCome += r.amountCents;
     else fixedToCome += r.amountCents;
+  }
+
+  // Opérations prévues à une date précise ce mois-ci (ex. « le 28, 80 € d'assurance »)
+  for (const p of planned) {
+    if (p.date <= today || p.date > monthEnd) continue;
+    if (p.kind === 'recette') incomeToCome += p.amountCents;
+    else fixedToCome += p.amountCents;
   }
 
   const incomeCents = income + incomeToCome;
@@ -131,4 +138,58 @@ export function habitualFlows(ops: Operation[], recurrings: Recurring[], today: 
     incomePerMonthCents: Math.round(incomeDaily * 30),
     months: months.length,
   };
+}
+
+/* ───────── Solde et « disponible fin de mois » ───────── */
+
+/**
+ * Solde actuel : solde de départ + opérations à partir du jour du solde de départ.
+ * Le solde de départ est le solde d'un jour précis : ce qui s'est passé avant n'en fait plus partie.
+ * (Sans date de départ — anciens comptes — toutes les opérations comptent.)
+ */
+export function balanceSince(openingCents: number, openingDate: string | null, ops: Operation[]): number {
+  let total = openingCents;
+  for (const o of ops) {
+    if (openingDate && dayKeyOfIso(o.date) < openingDate) continue;
+    total += o.kind === 'recette' ? o.amountCents : -o.amountCents;
+  }
+  return total;
+}
+
+export interface EndOfMonth {
+  /** Solde actuel. */
+  balanceCents: number;
+  /** Ce que vaudra le solde à la fin du mois, une fois toutes les récurrences à venir passées. */
+  availableCents: number;
+  incomeToComeCents: number;
+  expenseToComeCents: number;
+  /** Nombre de récurrences et d'opérations prévues encore à passer ce mois-ci. */
+  count: number;
+}
+
+/**
+ * « Disponible du mois » : solde actuel + recettes récurrentes à venir − dépenses récurrentes à venir, jusqu'à la fin du mois.
+ * Seules les récurrences comptent (pas de dépenses courantes estimées) : c'est ce qui est SÛR de passer.
+ */
+export function endOfMonthAvailable(balanceCents: number, recurrings: Recurring[], today: string, planned: PlannedOp[] = []): EndOfMonth {
+  const month = today.slice(0, 7);
+  const monthEnd = `${month}-${String(daysInMonth(Number(month.slice(0, 4)), Number(month.slice(5, 7)))).padStart(2, '0')}`;
+  let income = 0;
+  let expense = 0;
+  let count = 0;
+  for (const r of recurrings) {
+    if (!r.active) continue;
+    const n = occurrences(r.dayOfMonth, today, monthEnd).length; // une récurrence tombe au plus une fois par mois
+    if (n === 0) continue;
+    count++;
+    if (r.kind === 'recette') income += r.amountCents;
+    else expense += r.amountCents;
+  }
+  for (const p of planned) {
+    if (p.date <= today || p.date > monthEnd) continue;
+    count++;
+    if (p.kind === 'recette') income += p.amountCents;
+    else expense += p.amountCents;
+  }
+  return { balanceCents, availableCents: balanceCents + income - expense, incomeToComeCents: income, expenseToComeCents: expense, count };
 }

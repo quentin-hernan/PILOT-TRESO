@@ -2,7 +2,7 @@ import type { Category, Operation, OperationKind } from '../types';
 import { addDaysKey, dayKeyOfIso, keyOf, ymdOfKey, type Alert, type Forecast, type ForecastEvent } from './forecast';
 import { daysInMonth } from './dates';
 import { formatEuros } from './money';
-import type { MonthlyBudget } from './monthly';
+import type { EndOfMonth, MonthlyBudget } from './monthly';
 
 /** Réponses de Pilot aux questions : calculs sur les données de l'utilisateur, phrases en français. */
 
@@ -66,6 +66,12 @@ export function answerBalance(balanceCents: number, fc: Forecast): string {
   if (fc.firstNegative) s += ` Attention : d'après vos échéances, il passerait sous zéro le ${longDate(fc.firstNegative)}.`;
   else s += ` Dans 30 jours, il devrait être de ${eur(fc.horizons[0].balanceCents)}.`;
   return s;
+}
+
+export function answerAvailable(e: EndOfMonth, monthLabel: string): string {
+  if (e.count === 0) return `Il ne reste aucune récurrence à passer en ${monthLabel} : votre disponible est votre solde actuel, ${eur(e.balanceCents)}.`;
+  const parts = [e.expenseToComeCents > 0 && `${eur(e.expenseToComeCents)} de dépenses`, e.incomeToComeCents > 0 && `${eur(e.incomeToComeCents)} de recettes`].filter(Boolean);
+  return `Il vous restera ${eur(e.availableCents)} à la fin de ${monthLabel} : solde actuel ${eur(e.balanceCents)}, avec ${parts.join(' et ')} encore à passer.`;
 }
 
 export function answerSpent(

@@ -3,6 +3,7 @@ import type { RealtimeChannel } from '@supabase/supabase-js';
 import type { AccountType, Operation, OperationDraft, ProRole } from '../types';
 import { supabase } from '../lib/supabase';
 import { initialPersonalOps, initialProOps, PRO_OPENING_CENTS } from './mock';
+import { dayKeyOfIso } from '../lib/forecast';
 
 interface Options {
   /** true = compte connecté (Supabase), false = démonstration (données fictives locales). */
@@ -20,11 +21,14 @@ export interface OperationsApi {
   error: string | null;
   /** Solde de départ en centimes. */
   openingCents: number;
+  /** Jour (AAAA-MM-JJ) auquel ce solde a été renseigné : les opérations d'avant ce jour ne comptent plus. null = toutes comptent. */
+  openingDate: string | null;
   /** Renvoie l'identifiant de l'opération créée. */
   add: (draft: OperationDraft) => Promise<string>;
   update: (id: string, draft: OperationDraft) => Promise<void>;
   remove: (id: string) => Promise<void>;
-  setOpening: (cents: number) => Promise<void>;
+  /** Règle le solde de départ. `date` : jour du solde (aujourd'hui par défaut) ; `null` = sans date (toutes les opérations comptent). */
+  setOpening: (cents: number, date?: string | null) => Promise<void>;
   /** Recharge les opérations depuis la base (après la création de récurrences, par exemple). */
   refresh: () => void;
 }
@@ -52,6 +56,9 @@ export function useOperations({ live, account, userId, orgId, role }: Options): 
   const personal = account === 'particulier';
   const [ops, setOps] = useState<Operation[]>(() => (live ? [] : personal ? initialPersonalOps() : initialProOps()));
   const [openingCents, setOpeningCents] = useState(live || personal ? 0 : PRO_OPENING_CENTS);
+  const [openingDate, setOpeningDateState] = useState<string | null>(null);
+  // false tant que la migration 0005 n'est pas faite dans la base (le solde de départ reste alors sans date)
+  const [dateSupported, setDateSupported] = useState(true);
   const [status, setStatus] = useState<OperationsApi['status']>(live ? 'loading' : 'ready');
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -104,11 +111,17 @@ export function useOperations({ live, account, userId, orgId, role }: Options): 
           .limit(2000);
         if (rows.error) throw new Error(rows.error.message);
 
-        const opening = await sb
+        let supported = true;
+        let opening = await sb
           .from(personal ? 'profiles' : 'organizations')
-          .select('opening_balance_cents')
+          .select('opening_balance_cents, opening_date')
           .eq('id', scopeVal)
           .maybeSingle();
+        if (opening.error) {
+          // base pas encore à jour pour la date du solde de départ : on relit sans elle
+          supported = false;
+          opening = (await sb.from(personal ? 'profiles' : 'organizations').select('opening_balance_cents').eq('id', scopeVal).maybeSingle()) as typeof opening;
+        }
 
         if (cancelled) return;
         setSlugToId(s2i);
@@ -117,6 +130,9 @@ export function useOperations({ live, account, userId, orgId, role }: Options): 
           setError("La base n'est pas à jour : exécutez le fichier supabase/migrations/0002_operations.sql dans Supabase.");
         } else {
           setOpeningCents(Number(opening.data?.opening_balance_cents ?? 0));
+          setOpeningDateState(supported ? ((opening.data as { opening_date?: string | null } | null)?.opening_date ?? null) : null);
+          setDateSupported(supported);
+          if (!supported) setError("Pour dater le solde de départ, exécutez le fichier supabase/migrations/0005_opening_date.sql dans Supabase.");
         }
         setStatus('ready');
 
@@ -249,24 +265,28 @@ export function useOperations({ live, account, userId, orgId, role }: Options): 
 
   // ───── Solde de départ ─────
   const setOpening = useCallback(
-    async (cents: number) => {
+    async (cents: number, date?: string | null) => {
+      // Le solde de départ est le solde du jour où on le renseigne (sauf indication contraire).
+      const day = date === undefined ? dayKeyOfIso(new Date().toISOString()) : date;
       if (!live) {
         setOpeningCents(cents);
+        setOpeningDateState(day);
         return;
       }
       if (!supabase || !scopeVal) throw new Error('Non connecté.');
       const { data, error: e } = await supabase
         .from(personal ? 'profiles' : 'organizations')
-        .update({ opening_balance_cents: cents })
+        .update(dateSupported ? { opening_balance_cents: cents, opening_date: day } : { opening_balance_cents: cents })
         .eq('id', scopeVal)
         .select('id');
       if (e) throw new Error(e.message);
       if (!data || data.length === 0) throw new Error('Modification refusée.');
       setOpeningCents(cents);
-      setError(null);
+      setOpeningDateState(dateSupported ? day : null);
+      if (dateSupported) setError(null);
     },
-    [live, personal, scopeVal],
+    [live, personal, scopeVal, dateSupported],
   );
 
-  return { ops, status, error, openingCents, add, update, remove, setOpening, refresh };
+  return { ops, status, error, openingCents, openingDate, add, update, remove, setOpening, refresh };
 }

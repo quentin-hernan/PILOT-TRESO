@@ -1799,7 +1799,8 @@ body {
 .pilot-dialog-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 45;
+  /* sous la barre du bas (z-index 20) : le bouton micro reste utilisable pour répondre */
+  z-index: 15;
   display: grid;
   place-items: center;
   padding: 16px;
@@ -1883,4 +1884,51 @@ body {
   background: color-mix(in srgb, var(--pos) 12%, #fff);
   color: var(--pos);
   font-size: 0.84rem;
+}
+
+.pilot-listen-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.pilot-listen-text small {
+  color: #dbe7fb;
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pilot-panel.phase-listening .btn-ghost {
+  background: transparent;
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.6);
+}
+
+/* Carte « À venir » */
+.upcoming .fc-events li {
+  grid-template-columns: 52px 1fr auto;
+}
+.tag {
+  font-style: normal;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 1px 6px;
+  margin-left: 4px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.tag-prevu {
+  color: var(--brand);
+  border-color: color-mix(in srgb, var(--brand) 40%, #fff);
+}
+.mini-x {
+  margin-left: 8px;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1;
 }

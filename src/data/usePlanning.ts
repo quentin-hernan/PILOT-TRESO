@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { AccountType, Invoice, ProRole, Recurring } from '../types';
+import type { AccountType, Invoice, OperationKind, PlannedOp, ProRole, Recurring } from '../types';
 import { supabase } from '../lib/supabase';
 import { makeDate } from '../lib/dates';
 import { todayKey, ymdOfKey } from '../lib/forecast';
 import { FIXED_CATEGORY_IDS, PERSONAL_CATEGORIES } from './categories';
-import { initialInvoices, personalRecurrings, proRecurrings } from './mock';
+import { initialInvoices, initialPlanned, personalRecurrings, proRecurrings } from './mock';
 
 interface Options {
   live: boolean;
@@ -33,6 +33,15 @@ export interface InvoiceDraft {
   direction: Invoice['direction'];
 }
 
+export interface PlannedDraft {
+  kind: OperationKind;
+  amountCents: number;
+  categoryId: string;
+  label: string;
+  /** AAAA-MM-JJ */
+  dateKey: string;
+}
+
 export interface PlanningApi {
   status: 'loading' | 'ready' | 'error';
   error: string | null;
@@ -40,6 +49,11 @@ export interface PlanningApi {
   /** Budget mensuel par catégorie (slug -> centimes). Compte particulier. */
   budgets: Map<string, number>;
   invoices: Invoice[];
+  /** Opérations ponctuelles prévues à une date future. */
+  planned: PlannedOp[];
+  /** Renvoie l'identifiant créé. */
+  addPlanned: (d: PlannedDraft) => Promise<string>;
+  removePlanned: (id: string) => Promise<void>;
   /** Renvoie l'identifiant créé. */
   addRecurring: (d: RecurringDraft) => Promise<string>;
   updateRecurring: (id: string, d: RecurringDraft) => Promise<void>;
@@ -77,6 +91,17 @@ interface InvRow {
   status: 'en_attente' | 'payee';
 }
 
+interface PlanRow {
+  id: string;
+  kind: 'depense' | 'recette';
+  amount_cents: number;
+  category_id: string | null;
+  label: string;
+  planned_date: string;
+}
+const PLAN_COLUMNS = 'id, kind, amount_cents, category_id, label, planned_date';
+const NOT_READY_PLANNED = "Pour les dépenses prévues, exécutez le fichier supabase/migrations/0006_planned.sql dans Supabase.";
+
 const REC_COLUMNS = 'id, kind, amount_cents, category_id, label, day_of_month, active, last_applied';
 const INV_COLUMNS = 'id, counterparty, label, amount_cents, due_date, direction, status';
 
@@ -105,6 +130,7 @@ export function usePlanning({ live, account, userId, orgId, role, onRecurringApp
   );
   const [status, setStatus] = useState<PlanningApi['status']>(live && hasAccess ? 'loading' : 'ready');
   const [error, setError] = useState<string | null>(null);
+  const [planned, setPlanned] = useState<PlannedOp[]>(() => (live || !personal ? [] : initialPlanned()));
   const [slugToId, setSlugToId] = useState<Map<string, string>>(new Map());
 
   const scopeCol = personal ? 'owner_id' : 'org_id';
@@ -152,7 +178,12 @@ export function usePlanning({ live, account, userId, orgId, role, onRecurringApp
           }
           return;
         }
-        if (Number(applied.data) > 0 && !cancelled) onRecurringApplied();
+        let appliedCount = Number(applied.data);
+        // les opérations prévues dont la date est arrivée deviennent de vraies opérations
+        const plannedApplied = await sb.rpc('apply_planned');
+        const plannedOk = !plannedApplied.error;
+        if (plannedOk) appliedCount += Number(plannedApplied.data);
+        if (appliedCount > 0 && !cancelled) onRecurringApplied();
 
         // 2. Lecture.
         const cats = await sb.from('categories').select('id, slug, budget_cents').eq(scopeCol, scopeVal);
@@ -161,6 +192,7 @@ export function usePlanning({ live, account, userId, orgId, role, onRecurringApp
         const i2s = new Map<string, string>(cats.data.map((c) => [c.id as string, c.slug as string]));
         const recs = await sb.from('recurrences').select(REC_COLUMNS).eq(scopeCol, scopeVal).order('day_of_month');
         if (recs.error) throw new Error(recs.error.message);
+        const plan = plannedOk ? await sb.from('planned_operations').select(PLAN_COLUMNS).eq(scopeCol, scopeVal).order('planned_date') : null;
         const invs = personal ? null : await sb.from('invoices').select(INV_COLUMNS).eq('org_id', scopeVal).order('due_date');
         if (invs?.error) throw new Error(invs.error.message);
 
@@ -169,6 +201,8 @@ export function usePlanning({ live, account, userId, orgId, role, onRecurringApp
         setBudgetMap(new Map(cats.data.filter((c) => c.budget_cents && !FIXED_CATEGORY_IDS.has(c.slug as string)).map((c) => [c.slug as string, Number(c.budget_cents)])));
         setRecurrings((recs.data as RecRow[]).map((r) => toRecurring(r, i2s)));
         setInvoices(invs ? (invs.data as InvRow[]).map(toInvoice) : []);
+        setPlanned(plan && !plan.error ? (plan.data as PlanRow[]).map((r) => ({ id: r.id, kind: r.kind, amountCents: Number(r.amount_cents), categoryId: (r.category_id && i2s.get(r.category_id)) || 'autre', label: r.label, date: r.planned_date })) : []);
+        if (!plannedOk || plan?.error) setError((e) => e ?? NOT_READY_PLANNED);
         setStatus('ready');
       } catch (e) {
         if (!cancelled) {
@@ -281,6 +315,42 @@ export function usePlanning({ live, account, userId, orgId, role, onRecurringApp
         if (!data || data.length === 0) throw new Error('Suppression refusée.');
       }
       setRecurrings((l) => l.filter((r) => r.id !== id));
+    },
+    [live],
+  );
+
+  // ───── Opérations prévues ─────
+  const addPlanned = useCallback(
+    async (d: PlannedDraft): Promise<string> => {
+      if (!live) {
+        const id = `pl-${Date.now()}`;
+        setPlanned((l) => [...l, { id, kind: d.kind, amountCents: d.amountCents, categoryId: d.categoryId, label: d.label, date: d.dateKey }]);
+        return id;
+      }
+      const { sb, scopeVal: sv } = need();
+      const { data, error: e } = await sb
+        .from('planned_operations')
+        .insert({ [scopeCol]: sv, kind: d.kind, amount_cents: d.amountCents, category_id: slugToId.get(d.categoryId) ?? null, label: d.label, planned_date: d.dateKey })
+        .select(PLAN_COLUMNS)
+        .single();
+      if (e) throw new Error(e.message.includes('planned_operations') ? NOT_READY_PLANNED : e.message);
+      const r = data as PlanRow;
+      setPlanned((l) => [...l, { id: r.id, kind: r.kind, amountCents: Number(r.amount_cents), categoryId: d.categoryId, label: r.label, date: r.planned_date }]);
+      return r.id;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [live, scopeCol, slugToId],
+  );
+
+  const removePlanned = useCallback(
+    async (id: string) => {
+      if (live) {
+        const { sb } = need();
+        const { data, error: e } = await sb.from('planned_operations').delete().eq('id', id).select('id');
+        if (e) throw new Error(e.message);
+        if (!data || data.length === 0) throw new Error('Suppression refusée.');
+      }
+      setPlanned((l) => l.filter((p) => p.id !== id));
     },
     [live],
   );
@@ -400,6 +470,9 @@ export function usePlanning({ live, account, userId, orgId, role, onRecurringApp
     recurrings,
     budgets: budgetMap,
     invoices,
+    planned,
+    addPlanned,
+    removePlanned,
     addRecurring,
     updateRecurring,
     setRecurringActive,

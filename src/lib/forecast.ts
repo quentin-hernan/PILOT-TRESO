@@ -1,4 +1,4 @@
-import type { Category, Invoice, Operation, Recurring } from '../types';
+import type { Category, Invoice, Operation, PlannedOp, Recurring } from '../types';
 import { daysInMonth, parisYMD, type YMD } from './dates';
 import { formatEuros } from './money';
 import { opsOfMonth } from './stats';
@@ -60,7 +60,9 @@ export interface ForecastEvent {
   date: string;
   cents: number; // signé : + encaissement, − décaissement
   label: string;
-  source: 'recurrence' | 'facture';
+  source: 'recurrence' | 'facture' | 'prevu';
+  /** Identifiant de l'opération prévue (pour pouvoir la supprimer). */
+  id?: string;
 }
 
 export interface ForecastPoint {
@@ -91,6 +93,8 @@ interface ForecastInput {
   balanceCents: number;
   recurrings: Recurring[];
   invoices: Invoice[];
+  /** Opérations prévues à une date précise. */
+  planned?: PlannedOp[];
   today: string;
   /** Ce qui passe d'habitude chaque mois en dehors des récurrences (voir habitualFlows). */
   habitual?: { expenseDailyCents: number; incomeDailyCents: number; expensePerMonthCents: number; incomePerMonthCents: number; months: number };
@@ -101,7 +105,7 @@ interface ForecastInput {
  * Les dépenses courantes non récurrentes ne sont pas devinées : seul ce qui est prévu est compté.
  * Les factures à payer en retard sont comptées dès aujourd'hui ; celles à encaisser en retard ne le sont pas.
  */
-export function forecast({ balanceCents, recurrings, invoices, today, habitual }: ForecastInput): Forecast {
+export function forecast({ balanceCents, recurrings, invoices, planned = [], today, habitual }: ForecastInput): Forecast {
   const end = addDaysKey(today, 90);
   const events: ForecastEvent[] = [];
 
@@ -109,6 +113,12 @@ export function forecast({ balanceCents, recurrings, invoices, today, habitual }
     if (!r.active) continue;
     for (const date of occurrences(r.dayOfMonth, today, end)) {
       events.push({ date, cents: r.kind === 'recette' ? r.amountCents : -r.amountCents, label: r.label, source: 'recurrence' });
+    }
+  }
+
+  for (const p of planned) {
+    if (p.date > today && p.date <= end) {
+      events.push({ date: p.date, cents: p.kind === 'recette' ? p.amountCents : -p.amountCents, label: p.label, source: 'prevu', id: p.id });
     }
   }
 
