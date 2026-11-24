@@ -49,4 +49,5 @@ export const EXPENSE_WORDS = [
 /** Verbes / mots qui indiquent une recette (encaissement). */
 export const INCOME_WORDS = [
   'recu', 'recois', 'recevoir', 'encaisse', 'encaisser', 'vendu', 'vendre', 'gagne', 'gagner', 'touche', 'toucher', 'rentre', 'percu',
+  'recette', 'recettes', 'revenu', 'revenus', 'rentree', 'rentrees', 'encaissement', 'encaissements', 'gain', 'gains',
 ];

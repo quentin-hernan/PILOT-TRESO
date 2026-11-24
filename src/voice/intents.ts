@@ -206,6 +206,16 @@ export function parseIntent(transcript: string, ctx: IntentContext): Intent | nu
     }
   }
 
+  // Devis signé / accepté (compte professionnel) : argent à recevoir (ou à payer pour un devis fournisseur) à une échéance
+  if (pro && has(t, /\bdevis\b/) && has(t, /\b(signe|signes|signee|signees|accepte|accepts|accepter|valide|validee|ajoute|ajouter|cree|creer|nouveau|enregistre|enregistrer|ajout)\b/)) {
+    const direction: Invoice['direction'] = has(t, /\b(a payer|fournisseur|je dois|a regler)\b/) ? 'a_payer' : 'a_encaisser';
+    const { key, rest } = parseDueDate(t, ctx.today);
+    return {
+      type: 'invoice_new',
+      draft: { direction, counterparty: counterpartyOf(transcript), label: 'Devis signé', amountCents: parseAmount(rest), dueKey: key },
+    };
+  }
+
   // Récurrences : pause, reprise, suppression
   if (has(t, /\b(en pause|suspends|suspendre|interromps|interrompre)\b/) && !has(t, /\bfactures?\b/)) {
     return { type: 'recurring', action: 'pause', query: queryOf(t, /\b(en pause|suspends|suspendre|interromps|interrompre)\b/g) };
