@@ -115,9 +115,28 @@ const UNDO_WINDOW_MS = 12_000;
 const isWeakDevice = (): boolean =>
   typeof navigator !== 'undefined' && (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.hardwareConcurrency ?? 8) <= 4);
 
+const BOOT_KEY = 'pilottreso.pilotBoot';
+
+// Le lancement précédent s'est terminé brutalement (page plantée) : on coupe Pilot pour que l'application puisse s'ouvrir
+(() => {
+  try {
+    if (localStorage.getItem(BOOT_KEY) === '1') {
+      localStorage.setItem(ENABLED_KEY, '0');
+      localStorage.setItem(ENGINE_KEY, 'browser');
+      localStorage.removeItem(BOOT_KEY);
+    }
+  } catch {
+    /* stockage indisponible */
+  }
+})();
+
 const readEngine = (): ListenEngine => {
   try {
-    return localStorage.getItem(ENGINE_KEY) === 'browser' && isBrowserEngineAvailable() ? 'browser' : 'ondevice';
+    const saved = localStorage.getItem(ENGINE_KEY);
+    if (saved === 'browser' && isBrowserEngineAvailable()) return 'browser';
+    // téléphone : le modèle Whisper sature la mémoire, on prend la dictée du navigateur par défaut
+    if (saved === null && isWeakDevice() && isBrowserEngineAvailable()) return 'browser';
+    return 'ondevice';
   } catch {
     return 'ondevice';
   }
@@ -469,6 +488,19 @@ export function usePilot({ blocked, dispatch, onAnswer }: Options): PilotApi {
       return;
     }
     setState('starting');
+    // Garde-fou anti-plantage : si la page se ferme brutalement avant que l'écoute soit stable, Pilot est coupé au prochain lancement
+    try {
+      localStorage.setItem(BOOT_KEY, '1');
+    } catch {
+      /* stockage indisponible */
+    }
+    const stable = setTimeout(() => {
+      try {
+        localStorage.removeItem(BOOT_KEY);
+      } catch {
+        /* stockage indisponible */
+      }
+    }, 10_000);
     let lastBucket = 0;
     const useBrowser = listenEngine === 'browser';
     // l'aperçu (« Dis Pilot » repéré avant la fin) double le calcul : inutile et coûteux sur téléphone avec le moteur de l'appareil
@@ -501,6 +533,12 @@ export function usePilot({ blocked, dispatch, onAnswer }: Options): PilotApi {
     });
     listenerRef.current = listener;
     return () => {
+      clearTimeout(stable);
+      try {
+        localStorage.removeItem(BOOT_KEY);
+      } catch {
+        /* stockage indisponible */
+      }
       listenerRef.current = null;
       listener.stop();
     };

@@ -91,6 +91,7 @@ export function markVoiceSetupDone(engine: VoiceEngine): void {
  * instantanément. Ne fait rien tant que la configuration unique n'est pas terminée.
  */
 export function warmUpVoiceEngine(): void {
+  if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) return; // téléphone : pas de chargement en arrière-plan (mémoire)
   if (getPreferredEngine() === 'ondevice' && isVoiceSetupDone('ondevice') && hasOnDeviceConsent()) preloadOnDeviceModel();
 }
 

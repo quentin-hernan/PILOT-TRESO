@@ -23,7 +23,8 @@ type PipelineFactory = (
 env.allowLocalModels = false;
 
 // Plusieurs cœurs du processeur pour le calcul (possible quand la page est « isolée » : voir les en-têtes COOP / COEP).
-if (self.crossOriginIsolated) {
+const isPhone = /Android|iPhone|iPad|iPod/i.test(self.navigator.userAgent);
+if (self.crossOriginIsolated && !isPhone) {
   const cores = self.navigator.hardwareConcurrency || 4;
   (env.backends.onnx as { wasm?: { numThreads?: number } }).wasm = {
     ...((env.backends.onnx as { wasm?: object }).wasm ?? {}),
